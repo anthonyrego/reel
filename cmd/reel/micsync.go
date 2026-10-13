@@ -14,11 +14,13 @@ import (
 	"math"
 	"sync"
 	"time"
-	"unsafe"
 
 	"github.com/Zyko0/go-sdl3/sdl"
 
 	"github.com/anthonyrego/reel/internal/avsync"
+	"github.com/anthonyrego/reel/internal/config"
+	"github.com/anthonyrego/reel/internal/gfx"
+	"github.com/anthonyrego/reel/internal/logx"
 	"github.com/anthonyrego/reel/internal/mac"
 	"github.com/anthonyrego/reel/internal/mixer"
 	"github.com/anthonyrego/reel/internal/platform"
@@ -89,31 +91,61 @@ func (h *heard) peak() float64 {
 
 func runMicsync(args []string) error {
 	fs := flag.NewFlagSet("micsync", flag.ContinueOnError)
-	mic := fs.String("mic", mac.MicDefault, "the mic: an ID from devices, or default")
+	mic := fs.String("mic", mac.MicDefault, "the mic: an ID from devices, default, or none (agents: the tap alone)")
 	dur := fs.Duration("for", 10*time.Second, "how long to click")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	mics, err := mac.Mics()
+	paths, err := config.Resolve()
 	if err != nil {
 		return err
 	}
-	name := *mic
-	for _, m := range mics {
-		if m.ID == *mic || (*mic == mac.MicDefault && m.Default) {
-			name = fmt.Sprintf("%s (%s)", m.Name, m.Transport)
+	logf, err := logx.Setup(paths.Logs, "micsync", false)
+	if err != nil {
+		return err
+	}
+	defer logf.Close()
+	name := ""
+	if *mic != "none" {
+		name = *mic
+		mics, err := mac.Mics()
+		if err != nil {
+			return err
+		}
+		for _, m := range mics {
+			if m.ID == *mic || (*mic == mac.MicDefault && m.Default) {
+				name = fmt.Sprintf("%s (%s)", m.Name, m.Transport)
+			}
 		}
 	}
+
+	// ScreenCaptureKit lists only apps with a window, and the tap must hear
+	// reel alone: the beacon's window, flashing on every click, is it.
+	a, err := openWindow(gfx.WindowConfig{Title: "Reel mic sync", Width: 320, Height: 200, Hidden: true}, false)
+	if err != nil {
+		return err
+	}
+	defer a.close()
 	if err := platform.InitAudio(); err != nil {
 		return err
 	}
-	defer platform.Quit()
+	b := newBeacon(time.Second, *dur)
+	b.gain = 0.5 // −6 dBFS: the mic hears it across the room
+	defer b.close()
+	a.scene = b
+	a.window.Handle().SetAlwaysOnTop(true)
+	a.window.Handle().Show()
+	a.render()
 
 	var tap, heardMic heard
-	s, err := mac.StartStream(mac.StreamConfig{
+	cfg := mac.StreamConfig{
 		Target: mac.Target{OwnAppOnly: true}, Width: 2, Height: 2, FPS: 1,
-		SystemAudio: true, IncludeOwnAudio: true, Mic: *mic,
-	}, func(smp mac.Sample) {
+		SystemAudio: true, IncludeOwnAudio: true,
+	}
+	if *mic != "none" {
+		cfg.Mic = *mic
+	}
+	s, err := mac.StartStream(cfg, func(smp mac.Sample) {
 		switch smp.Kind {
 		case mac.KindAudio:
 			tap.add(smp, 2)
@@ -124,30 +156,34 @@ func runMicsync(args []string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("clicking for %s through the speakers; %s listens (turn the volume up, no headphones)\n", *dur, name)
-	time.Sleep(500 * time.Millisecond) // let the mic settle
-	// Louder than the beacon: the mic hears them across the room.
-	spec := &sdl.AudioSpec{Format: sdl.AUDIO_F32LE, Channels: 1, Freq: beaconRate}
-	out := sdl.AUDIO_DEVICE_DEFAULT_PLAYBACK.OpenAudioDeviceStream(spec, 0)
-	if out == nil {
+	if name == "" {
+		fmt.Printf("clicking once a second for %s; no mic, the tap alone\n", *dur)
+	} else {
+		fmt.Printf("clicking once a second for %s; %s listens (speakers up, no headphones)\n", *dur, name)
+	}
+	if err := b.begin(); err != nil {
 		s.Stop()
-		return errors.New("couldn't open the speakers")
+		return err
 	}
-	pcm := clicks(beaconPeriod*2, *dur)
-	for i := range pcm {
-		pcm[i] *= 5 // −6 dBFS
+	go func() {
+		time.Sleep(*dur + 500*time.Millisecond)
+		sdl.PushEvent(&sdl.Event{Type: sdl.EVENT_QUIT})
+	}()
+	if err := a.run(0); err != nil {
+		s.Stop()
+		return err
 	}
-	out.PutData(unsafe.Slice((*byte)(unsafe.Pointer(&pcm[0])), len(pcm)*4))
-	out.ResumeDevice()
-	time.Sleep(*dur + time.Second)
-	out.Destroy()
 	s.Stop()
 
 	played := tap.onsets(0.05)
-	fmt.Printf("the tap heard %d clicks; the mic peaked at %.1f dBFS\n", len(played), 20*math.Log10(math.Max(heardMic.peak(), 1e-9)))
+	fmt.Printf("the tap heard %d clicks\n", len(played))
 	if len(played) == 0 {
 		return errors.New("the tap heard nothing: is the output muted?")
 	}
+	if *mic == "none" {
+		return nil
+	}
+	fmt.Printf("the mic peaked at %.1f dBFS\n", 20*math.Log10(math.Max(heardMic.peak(), 1e-9)))
 	threshold := math.Max(heardMic.peak()/4, 0.002)
 	lags := avsync.Pair(played, heardMic.onsets(threshold), 0.4)
 	// Pair matches each played click with the nearest heard one; the mic

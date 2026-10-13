@@ -314,7 +314,7 @@ func contentFilter(content objc.ID, t Target) (objc.ID, error) {
 	self := ownApp(content.Send(sel("applications")))
 	if t.OwnAppOnly {
 		if self == 0 {
-			return 0, errors.New("stream: reel isn't among the running applications")
+			return 0, errors.New("stream: ScreenCaptureKit doesn't list reel (it lists only apps with a window)")
 		}
 		return class("SCContentFilter").Send(sel("alloc")).Send(sel("initWithDisplay:includingApplications:exceptingWindows:"),
 			display, nsArray(self), nsArray()).Send(sel("autorelease")), nil

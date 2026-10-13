@@ -57,7 +57,7 @@ REEL_DATA_DIR=$PWD/.dev/data ./build/reel probe -self -for 6s </dev/null   # age
 ./build/reel probe -display main -mic default -for 10s   # user only: a display and a mic (also -window ID, -app Chrome, -system-audio=false)
 REEL_DATA_DIR=$PWD/.dev/data ./build/reel selftest -for 20s </dev/null   # agents: the beacon + a fake mic to an MP4, then every check (ffmpeg for codec, frames, audio); -video-only, -fake-mic=false, -mic-ppm N
 ./build/reel record -display main -mic default [-for 60s]   # user only: a real recording to <recordings> (Ctrl-C stops; also -window ID, -app NAME, -system-audio=false)
-./build/reel micsync -mic <ID>   # user only: clicks through the speakers; how late the mic hears them against the tap
+./build/reel micsync -mic <ID>   # user only: clicks through the speakers (a small window flashes with each); how late the mic hears them against the tap. -mic none: the tap alone (agents)
 ./build/reel analyze [-flash-period 500ms] FILE.mp4   # dev: the same checks on any recording
 REEL_DATA_DIR=$PWD/.dev/data ./build/reel app -exit-after 4s </dev/null >/dev/null 2>&1   # a short window run from an agent
 codesign -d -r- build/Reel.app   # must say certificate leaf

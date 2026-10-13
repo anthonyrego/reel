@@ -35,6 +35,7 @@ const (
 type beacon struct {
 	period    time.Duration
 	clicksFor time.Duration
+	gain      float64 // the clicks' peak (beaconGain unless set)
 
 	start     time.Time
 	startHost int64 // start on the host clock (ns), for fake sources
@@ -63,6 +64,11 @@ func (b *beacon) begin() error {
 		return errors.New("beacon: couldn't open the speakers")
 	}
 	pcm := clicks(b.period, b.clicksFor)
+	if b.gain > 0 {
+		for i := range pcm {
+			pcm[i] *= float32(b.gain / beaconGain)
+		}
+	}
 	if err := s.PutData(unsafe.Slice((*byte)(unsafe.Pointer(&pcm[0])), len(pcm)*4)); err != nil {
 		s.Destroy()
 		return fmt.Errorf("beacon: queue the clicks: %w", err)
