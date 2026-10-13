@@ -1,6 +1,9 @@
 package mac
 
 import (
+	"os"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -117,6 +120,34 @@ func TestCMTimeNanos(t *testing.T) {
 	} {
 		if got := c.t.Nanos(); got != c.want {
 			t.Errorf("%+v = %d, want %d", c.t, got, c.want)
+		}
+	}
+}
+
+// TestConstantsListed: every constant("…") the package reads is in the
+// constants table (constant panics on one that isn't, which only shows
+// when that path runs).
+func TestConstantsListed(t *testing.T) {
+	listed := map[string]bool{}
+	for _, names := range constants {
+		for _, n := range names {
+			listed[n] = true
+		}
+	}
+	files, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	use := regexp.MustCompile(`constant\("([A-Za-z0-9_]+)"\)`)
+	for _, f := range files {
+		src, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, m := range use.FindAllStringSubmatch(string(src), -1) {
+			if !listed[m[1]] {
+				t.Errorf("%s reads constant %s, which isn't in the constants table", f, m[1])
+			}
 		}
 	}
 }

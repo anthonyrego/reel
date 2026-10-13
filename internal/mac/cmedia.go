@@ -170,7 +170,12 @@ func loadCoreMedia() error {
 
 // HostTime is now on the host time clock, which ScreenCaptureKit stamps
 // its samples with.
-func HostTime() CMTime { return cm.clockTime(cm.hostClock()) }
+func HostTime() CMTime {
+	if load() != nil {
+		return CMTime{}
+	}
+	return cm.clockTime(cm.hostClock())
+}
 
 // ClockTime is now on a CMClock.
 func ClockTime(clock uintptr) CMTime { return cm.clockTime(clock) }
@@ -353,3 +358,6 @@ func Release(ref uintptr) { lib.cfRelease(ref) }
 
 // WithPool runs fn on a locked OS thread inside an autorelease pool.
 func WithPool(fn func()) { withPool(fn) }
+
+// BigEndian reports big-endian samples.
+func (d ASBD) BigEndian() bool { return d.FormatFlags&audioFlagBigEndian != 0 }

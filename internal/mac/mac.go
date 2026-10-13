@@ -30,6 +30,7 @@ import (
 const (
 	screenCaptureKitPath = "/System/Library/Frameworks/ScreenCaptureKit.framework/ScreenCaptureKit"
 	avFoundationPath     = "/System/Library/Frameworks/AVFoundation.framework/AVFoundation"
+	avfAudioPath         = "/System/Library/Frameworks/AVFAudio.framework/AVFAudio"
 	coreMediaPath        = "/System/Library/Frameworks/CoreMedia.framework/CoreMedia"
 	coreGraphicsPath     = "/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics"
 	coreFoundationPath   = "/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation"
@@ -47,7 +48,8 @@ var selectors = map[string][]string{
 	"SCDisplay":            {"displayID", "width", "height", "frame"},
 	"SCWindow":             {"windowID", "frame", "title", "windowLayer", "owningApplication", "isOnScreen"},
 	"SCRunningApplication": {"bundleIdentifier", "applicationName", "processID"},
-	"SCContentFilter":      {"initWithDisplay:excludingApplications:exceptingWindows:", "pointPixelScale", "initWithDesktopIndependentWindow:"},
+	"SCContentFilter": {"initWithDisplay:excludingApplications:exceptingWindows:", "pointPixelScale", "initWithDesktopIndependentWindow:",
+		"initWithDisplay:includingApplications:exceptingWindows:"},
 	"SCStream": {"initWithFilter:configuration:delegate:", "addStreamOutput:type:sampleHandlerQueue:error:",
 		"startCaptureWithCompletionHandler:", "stopCaptureWithCompletionHandler:", "synchronizationClock"},
 	"SCStreamConfiguration": {"init", "setWidth:", "setHeight:", "setMinimumFrameInterval:", "setPixelFormat:", "setQueueDepth:",
@@ -87,7 +89,8 @@ var funcs = map[string][]string{
 		"CMSampleBufferDataIsReady", "CMSampleBufferGetImageBuffer", "CMSampleBufferGetSampleAttachmentsArray",
 		"CMSampleBufferGetFormatDescription", "CMAudioFormatDescriptionGetStreamBasicDescription",
 		"CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer", "CMClockGetHostTimeClock", "CMClockGetTime",
-		"CMSampleBufferCreateCopyWithNewTiming"},
+		"CMSampleBufferCreateCopyWithNewTiming", "CMAudioFormatDescriptionCreate", "CMBlockBufferCreateWithMemoryBlock",
+		"CMBlockBufferReplaceDataBytes", "CMAudioSampleBufferCreateReadyWithPacketDescriptions"},
 	coreVideoPath: {"CVPixelBufferGetWidth", "CVPixelBufferGetHeight", "CVPixelBufferGetPixelFormatType"},
 }
 
@@ -102,6 +105,7 @@ var constants = map[string][]string{
 		"AVVideoColorPropertiesKey", "AVVideoColorPrimariesKey", "AVVideoColorPrimaries_ITU_R_709_2",
 		"AVVideoTransferFunctionKey", "AVVideoTransferFunction_ITU_R_709_2", "AVVideoYCbCrMatrixKey", "AVVideoYCbCrMatrix_ITU_R_709_2"},
 	coreGraphicsPath:     {"kCGColorSpaceSRGB", "kCGDisplayStreamYCbCrMatrix_ITU_R_709_2"},
+	avfAudioPath:         {"AVFormatIDKey", "AVSampleRateKey", "AVNumberOfChannelsKey", "AVEncoderBitRateKey"},
 	screenCaptureKitPath: {"SCStreamFrameInfoStatus"},
 }
 
@@ -132,7 +136,7 @@ func load() error {
 
 func loadOnce() error {
 	handles := map[string]uintptr{}
-	for _, path := range []string{foundationPath, coreFoundationPath, coreGraphicsPath, coreMediaPath, coreVideoPath, avFoundationPath, screenCaptureKitPath} {
+	for _, path := range []string{foundationPath, coreFoundationPath, coreGraphicsPath, coreMediaPath, coreVideoPath, avfAudioPath, avFoundationPath, screenCaptureKitPath} {
 		h, err := purego.Dlopen(path, purego.RTLD_NOW|purego.RTLD_GLOBAL)
 		if err != nil {
 			return fmt.Errorf("mac: %w", err)
@@ -163,6 +167,9 @@ func loadOnce() error {
 		return fmt.Errorf("mac: %w", err)
 	}
 	if err := loadWriter(); err != nil {
+		return fmt.Errorf("mac: %w", err)
+	}
+	if err := loadAudioWriter(); err != nil {
 		return fmt.Errorf("mac: %w", err)
 	}
 	lib.consts = map[string]objc.ID{}

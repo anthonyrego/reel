@@ -22,6 +22,14 @@ import (
 	"github.com/ebitengine/purego/objc"
 )
 
+// AudioSettings is how the audio track is encoded: AAC from the mixer's
+// 48 kHz stereo float32.
+type AudioSettings struct {
+	Rate     int // 48000
+	Channels int // 2
+	Bitrate  int // bits a second
+}
+
 // VideoSettings is how the video track is encoded.
 type VideoSettings struct {
 	Width, Height int // even
@@ -53,10 +61,13 @@ type Writer struct {
 	path  string
 	w     objc.ID // AVAssetWriter, owned
 	video objc.ID // AVAssetWriterInput, owned
+	audio objc.ID // AVAssetWriterInput, owned; 0 without audio
+	pcm   uintptr // the CMAudioFormatDescription of what AppendAudio takes
 	state writerState
 	err   error
 
-	Appended, Dropped int // video samples written, and dropped because the encoder was busy
+	Appended, Dropped int   // video samples written, and dropped because the encoder was busy
+	AudioFrames       int64 // audio frames written
 }
 
 // cmSampleTimingInfo is CoreMedia's CMSampleTimingInfo.
@@ -96,11 +107,11 @@ func loadWriter() error {
 // never writes over a file.
 var ErrExists = errors.New("the file already exists")
 
-// NewWriter opens an MP4 at path with one H.264 track, starts writing and
-// starts the session at time zero. fragment, when above zero, writes a
+// NewWriter opens an MP4 at path with an H.264 track and, when audio isn't
+// nil, an AAC track, starts writing and starts the session at time zero. fragment, when above zero, writes a
 // movie fragment that often, so a recording cut short is still readable
 // up to its last fragment.
-func NewWriter(path string, v VideoSettings, fragment time.Duration) (*Writer, error) {
+func NewWriter(path string, v VideoSettings, audio *AudioSettings, fragment time.Duration) (*Writer, error) {
 	if err := load(); err != nil {
 		return nil, err
 	}
@@ -112,7 +123,7 @@ func NewWriter(path string, v VideoSettings, fragment time.Duration) (*Writer, e
 	}
 	wr := &Writer{path: path}
 	var err error
-	withPool(func() { err = wr.open(v, fragment) })
+	withPool(func() { err = wr.open(v, audio, fragment) })
 	if err != nil {
 		wr.release()
 		os.Remove(path)
@@ -121,7 +132,7 @@ func NewWriter(path string, v VideoSettings, fragment time.Duration) (*Writer, e
 	return wr, nil
 }
 
-func (wr *Writer) open(v VideoSettings, fragment time.Duration) error {
+func (wr *Writer) open(v VideoSettings, a *AudioSettings, fragment time.Duration) error {
 	url := class("NSURL").Send(sel("fileURLWithPath:"), nsString(wr.path))
 	var nserr objc.ID
 	wr.w = class("AVAssetWriter").Send(sel("alloc")).Send(sel("initWithURL:fileType:error:"), url, constant("AVFileTypeMPEG4"), unsafe.Pointer(&nserr))
@@ -155,6 +166,11 @@ func (wr *Writer) open(v VideoSettings, fragment time.Duration) error {
 		return errors.New("writer: can't add the video input")
 	}
 	wr.w.Send(sel("addInput:"), wr.video)
+	if a != nil {
+		if err := wr.openAudio(*a); err != nil {
+			return err
+		}
+	}
 
 	if !objc.Send[bool](wr.w, sel("startWriting")) {
 		return nsError("writer: start", wr.w.Send(sel("error")))
@@ -236,6 +252,9 @@ func (wr *Writer) Finish(end CMTime) error {
 	withPool(func() {
 		wr.w.Send(sel("endSessionAtSourceTime:"), end)
 		wr.video.Send(sel("markAsFinished"))
+		if wr.audio != 0 {
+			wr.audio.Send(sel("markAsFinished"))
+		}
 		done := make(chan struct{})
 		block := objc.NewBlock(func(objc.Block) { close(done) })
 		defer block.Release()
@@ -281,6 +300,14 @@ func (wr *Writer) failure() error {
 }
 
 func (wr *Writer) release() {
+	if wr.pcm != 0 {
+		lib.cfRelease(wr.pcm)
+		wr.pcm = 0
+	}
+	if wr.audio != 0 {
+		wr.audio.Send(sel("release"))
+		wr.audio = 0
+	}
 	if wr.video != 0 {
 		wr.video.Send(sel("release"))
 		wr.video = 0
@@ -309,3 +336,109 @@ func nsDict(kv ...objc.ID) objc.ID {
 func nsInt(v int) objc.ID       { return class("NSNumber").Send(sel("numberWithLongLong:"), int64(v)) }
 func nsFloat(v float64) objc.ID { return class("NSNumber").Send(sel("numberWithDouble:"), v) }
 func nsBool(v bool) objc.ID     { return class("NSNumber").Send(sel("numberWithBool:"), v) }
+
+// kAudioFormatMPEG4AAC and the LPCM flags (CoreAudioBaseTypes.h).
+const (
+	formatAAC         = 'a'<<24 | 'a'<<16 | 'c'<<8 | ' '
+	audioFlagPacked   = 1 << 3
+	blockAssureMemory = 1 << 0 // kCMBlockBufferAssureMemoryNowFlag
+)
+
+// The audio path's CoreMedia functions.
+var cmAudio struct {
+	formatCreate func(alloc uintptr, asbd *ASBD, layoutSize, layout, cookieSize, cookie, ext uintptr, out *uintptr) int32
+	blockCreate  func(structAlloc, mem, length, blockAlloc, custom, offset, dataLength uintptr, flags uint32, out *uintptr) int32
+	blockReplace func(src unsafe.Pointer, dst, offset, length uintptr) int32
+	sampleCreate func(alloc, block, format uintptr, frames int, pts CMTime, packets uintptr, out *uintptr) int32
+}
+
+// loadAudioWriter resolves them (inside loadOnce).
+func loadAudioWriter() error {
+	media, err := purego.Dlopen(coreMediaPath, purego.RTLD_NOW|purego.RTLD_GLOBAL)
+	if err != nil {
+		return err
+	}
+	purego.RegisterLibFunc(&cmAudio.formatCreate, media, "CMAudioFormatDescriptionCreate")
+	purego.RegisterLibFunc(&cmAudio.blockCreate, media, "CMBlockBufferCreateWithMemoryBlock")
+	purego.RegisterLibFunc(&cmAudio.blockReplace, media, "CMBlockBufferReplaceDataBytes")
+	purego.RegisterLibFunc(&cmAudio.sampleCreate, media, "CMAudioSampleBufferCreateReadyWithPacketDescriptions")
+	return nil
+}
+
+// openAudio adds the AAC input and makes the format description of the
+// PCM AppendAudio takes (inside withPool, before startWriting).
+func (wr *Writer) openAudio(a AudioSettings) error {
+	settings := nsDict(
+		constant("AVFormatIDKey"), nsInt(formatAAC),
+		constant("AVSampleRateKey"), nsFloat(float64(a.Rate)),
+		constant("AVNumberOfChannelsKey"), nsInt(a.Channels),
+		constant("AVEncoderBitRateKey"), nsInt(a.Bitrate),
+	)
+	kind := constant("AVMediaTypeAudio")
+	if !objc.Send[bool](wr.w, sel("canApplyOutputSettings:forMediaType:"), settings, kind) {
+		return fmt.Errorf("writer: AAC can't encode %d Hz × %d at %d bits a second", a.Rate, a.Channels, a.Bitrate)
+	}
+	wr.audio = class("AVAssetWriterInput").Send(sel("alloc")).Send(sel("initWithMediaType:outputSettings:"), kind, settings)
+	if wr.audio == 0 {
+		return errors.New("writer: no audio input")
+	}
+	wr.audio.Send(sel("setExpectsMediaDataInRealTime:"), true)
+	if !objc.Send[bool](wr.w, sel("canAddInput:"), wr.audio) {
+		return errors.New("writer: can't add the audio input")
+	}
+	wr.w.Send(sel("addInput:"), wr.audio)
+
+	asbd := ASBD{
+		SampleRate: float64(a.Rate), FormatID: formatLinearPCM,
+		FormatFlags:    audioFlagFloat | audioFlagPacked,
+		BytesPerPacket: uint32(4 * a.Channels), FramesPerPacket: 1, BytesPerFrame: uint32(4 * a.Channels),
+		ChannelsPerFrame: uint32(a.Channels), BitsPerChannel: 32,
+	}
+	if st := cmAudio.formatCreate(0, &asbd, 0, 0, 0, 0, 0, &wr.pcm); st != 0 {
+		return fmt.Errorf("writer: audio format: %d", st)
+	}
+	return nil
+}
+
+// AppendAudio writes interleaved float32 PCM (in the AudioSettings'
+// channels) starting at frame start of the recording. It reports false,
+// writing nothing, when the encoder has no room yet: the caller keeps the
+// block and tries again. The PCM is copied. Inside withPool, on the
+// writer's goroutine.
+func (wr *Writer) AppendAudio(pcm []float32, channels int, rate int, start int64) (bool, error) {
+	if wr.state != writerOpen || wr.audio == 0 {
+		return false, wr.failure()
+	}
+	frames := len(pcm) / channels
+	if frames == 0 {
+		return true, nil
+	}
+	if hot.sendInt(wr.w, hot.status) != avWriterWriting {
+		return false, wr.fail(nsError("writer", wr.w.Send(sel("error"))))
+	}
+	if !hot.sendBool(wr.audio, hot.ready) {
+		return false, nil
+	}
+	size := uintptr(frames * channels * 4)
+	// CoreMedia allocates and owns the memory; the samples are copied in.
+	// (Go memory handed to it would be freed by its allocator.)
+	var block uintptr
+	if st := cmAudio.blockCreate(0, 0, size, 0, 0, 0, size, blockAssureMemory, &block); st != 0 {
+		return false, wr.fail(fmt.Errorf("writer: audio block: %d", st))
+	}
+	defer lib.cfRelease(block)
+	if st := cmAudio.blockReplace(unsafe.Pointer(&pcm[0]), block, 0, size); st != 0 {
+		return false, wr.fail(fmt.Errorf("writer: audio copy: %d", st))
+	}
+	var sbuf uintptr
+	if st := cmAudio.sampleCreate(0, block, wr.pcm, frames, TimeOf(start, int32(rate)), 0, &sbuf); st != 0 {
+		return false, wr.fail(fmt.Errorf("writer: audio sample: %d", st))
+	}
+	ok := hot.sendBoolPtr(wr.audio, hot.appendSB, sbuf)
+	lib.cfRelease(sbuf)
+	if !ok {
+		return false, wr.fail(nsError("writer: append audio", wr.w.Send(sel("error"))))
+	}
+	wr.AudioFrames += int64(frames)
+	return true, nil
+}

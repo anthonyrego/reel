@@ -30,6 +30,9 @@ type Target struct {
 	// WindowID records one window, wherever it is and whatever covers it.
 	// It wins over DisplayID.
 	WindowID uint32
+	// OwnAppOnly records only this app on the display: its windows and its
+	// sound (self-tests, which must not hear or see anything else).
+	OwnAppOnly bool
 }
 
 // StreamConfig is a stream's setup.
@@ -308,8 +311,16 @@ func contentFilter(content objc.ID, t Target) (objc.ID, error) {
 	if display == 0 {
 		return 0, fmt.Errorf("stream: no display %d", t.DisplayID)
 	}
+	self := ownApp(content.Send(sel("applications")))
+	if t.OwnAppOnly {
+		if self == 0 {
+			return 0, errors.New("stream: reel isn't among the running applications")
+		}
+		return class("SCContentFilter").Send(sel("alloc")).Send(sel("initWithDisplay:includingApplications:exceptingWindows:"),
+			display, nsArray(self), nsArray()).Send(sel("autorelease")), nil
+	}
 	exclude := nsArray()
-	if self := ownApp(content.Send(sel("applications"))); self != 0 {
+	if self != 0 {
 		exclude = nsArray(self)
 	}
 	return class("SCContentFilter").Send(sel("alloc")).Send(sel("initWithDisplay:excludingApplications:exceptingWindows:"),
