@@ -168,6 +168,10 @@ type Recorder struct {
 	pauseMu            sync.Mutex
 	userPaused, hidden bool
 
+	// For Elapsed: the recording's zero (host ns, 0 before the first frame),
+	// the pauses so far, and when the open one began (0: none).
+	t0, pausedTotal, pausedSince atomic.Int64
+
 	// stopAt is the host time Stop was called (0 before): nothing captured
 	// after it is written, though capture runs on a moment for the audio.
 	stopAt atomic.Int64
@@ -465,6 +469,9 @@ func (r *Recorder) run() {
 			switch c.kind {
 			case ctlPause:
 				w.tl.Pause(c.at)
+				if w.tl.Paused() && r.pausedSince.Load() == 0 {
+					r.pausedSince.Store(c.at)
+				}
 			case ctlResume:
 				mac.WithPool(func() { w.resume(c.at) })
 			case ctlStop:
@@ -504,6 +511,7 @@ func (w *writing) frame(f frame) {
 	}
 	if !w.tl.Started() {
 		w.tl.Start(f.pts)
+		w.r.t0.Store(f.pts)
 	}
 	// Whatever happens to it, it's now the newest picture.
 	if w.last.sbuf != 0 {
@@ -600,6 +608,9 @@ func (w *writing) resume(at int64) {
 		return
 	}
 	w.tl.Resume(at)
+	if since := w.r.pausedSince.Swap(0); since != 0 {
+		w.r.pausedTotal.Add(at - since)
+	}
 	w.pauses = append(w.pauses, time.Duration(w.tl.At(at)))
 	// A buffer that straddled the pause's start ran a few ms past it: the
 	// sources pick up exactly where their PTS put them.
@@ -730,3 +741,27 @@ func (r *Recorder) Feed(src mixer.Source, pts int64, rate float64, pcm [][]float
 // err: self-tests of that path, which ScreenCaptureKit can't be made to
 // take on demand.
 func (r *Recorder) Interrupt(err error) { r.streamStopped(err) }
+
+// Elapsed is how long the recording is so far, pauses left out (zero
+// until its first frame). Any goroutine.
+func (r *Recorder) Elapsed() time.Duration {
+	t0 := r.t0.Load()
+	if t0 == 0 {
+		return 0
+	}
+	now := mac.HostTime().Nanos()
+	if at := r.stopAt.Load(); at > 0 {
+		now = at
+	}
+	e := now - t0 - r.pausedTotal.Load()
+	if since := r.pausedSince.Load(); since != 0 {
+		e -= now - since
+	}
+	return time.Duration(max(e, 0))
+}
+
+// ContentGone tells the recording what it records is gone (a window hid,
+// minimized or closed: ScreenCaptureKit doesn't say on a window's stream,
+// so the app watches) or back: it pauses meanwhile, as when a stream says
+// so itself.
+func (r *Recorder) ContentGone(gone bool) { r.activity(!gone) }
