@@ -12,7 +12,7 @@ export REEL_DATA_DIR
 SIGN ?= -
 export SIGN
 
-.PHONY: build app run render test vet shaders shaders-check check
+.PHONY: build app run render selftest record micsync test vet shaders shaders-check check
 
 build:
 	go build -o build/reel ./cmd/reel
@@ -27,6 +27,21 @@ app: build
 # environment. Logs: .dev/data/logs/app.log.
 run: app
 	open -n --env REEL_DATA_DIR=$(REEL_DATA_DIR) build/Reel.app --args $(ARGS)
+
+# Records the beacon (reel's own window) and a fake mic, then checks the
+# file (agents: safe; needs ffmpeg). ARGS="-for 8s -video-only" etc.
+selftest: build
+	./build/reel selftest $(ARGS) </dev/null
+
+# User only: a real recording of a display (or window) with a mic, to
+# .dev/data/recordings. ARGS="-display main -mic default -for 60s".
+record: build
+	./build/reel record $(ARGS)
+
+# User only: clicks through the speakers; how late a mic hears them.
+# ARGS="-mic <ID from ./build/reel devices>".
+micsync: build
+	./build/reel micsync $(ARGS)
 
 # Offscreen PNG of the home scene -> build/render.png (no window).
 render: build
