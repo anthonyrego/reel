@@ -26,7 +26,7 @@ var pure = []string{
 	"internal/library",
 	"internal/logx",
 	"internal/mixer",
-	"internal/mp4check",
+	"internal/mp4",
 	"internal/session",
 	"internal/settings",
 	"internal/text",
@@ -35,10 +35,12 @@ var pure = []string{
 	"internal/ui",
 }
 
-// bridge lists the macOS bridge: it calls Objective-C through purego but
-// never imports SDL, so the recording pipeline runs without a window.
+// bridge lists the macOS bridge and the recording pipeline over it: they
+// call Objective-C through purego but never import SDL, so recording runs
+// without a window.
 var bridge = []string{
 	"internal/mac",
+	"internal/record",
 }
 
 // TestPureDoesNotImportSDLOrObjC checks the pure tier.

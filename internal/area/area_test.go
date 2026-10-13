@@ -26,3 +26,18 @@ func TestPixels(t *testing.T) {
 		}
 	}
 }
+
+func TestVideoBitrate(t *testing.T) {
+	if b := VideoBitrate(4096, 2304, 30); b != MaxVideoBitrate {
+		t.Errorf("4K: %d", b)
+	}
+	if b := VideoBitrate(960, 600, 30); b != 1_382_400 {
+		t.Errorf("small window: %d", b)
+	}
+	if b := VideoBitrate(320, 200, 30); b != MinVideoBitrate {
+		t.Errorf("tiny: %d", b)
+	}
+	if mb := float64(MaxVideoBitrate+AudioBitrate) * 1800 / 8 / 1e6; mb >= 1000 {
+		t.Errorf("30 minutes is %.0f MB", mb)
+	}
+}

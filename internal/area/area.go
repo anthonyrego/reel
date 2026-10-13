@@ -37,3 +37,22 @@ func even(v float64) int {
 	n := int(math.Floor(v+1e-6)) &^ 1 // 2303.9999… is 2304
 	return max(n, 2)
 }
+
+// Bitrates, bits a second. Thirty minutes of MaxVideoBitrate plus
+// AudioBitrate is about 980 MB, under Slack's 1 GB a file.
+const (
+	MaxVideoBitrate = 4_200_000
+	MinVideoBitrate = 1_000_000
+	AudioBitrate    = 160_000
+)
+
+// bitsPerPixel is the video bitrate a pixel gets each frame. Screens are
+// mostly text and flat color, which H.264 squeezes well, and frames only
+// come while something moves.
+const bitsPerPixel = 0.08
+
+// VideoBitrate is the average bitrate to encode w×h at fps with.
+func VideoBitrate(w, h, fps int) int {
+	b := int(float64(w) * float64(h) * float64(fps) * bitsPerPixel)
+	return min(max(b, MinVideoBitrate), MaxVideoBitrate)
+}
