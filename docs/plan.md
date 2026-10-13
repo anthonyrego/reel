@@ -76,7 +76,7 @@ SCStream (one per recording; filter = display-excluding-self | window | display+
    - append only while the writer status is Writing;
    - every Dlsym'd `NSString` constant checked for nil when it loads.
 7. **Encoding limits.**
-   - Cap the encoded area at 3840×2160. A HiDPI 4K panel is 5120×2880, which exceeds H.264's limit.
+   - Cap the encoded frame at 4096×2304 (H.264 level 5.2). A HiDPI 4K panel is 5120×2880 or more, which exceeds it; the MacBook's own 3456×2234 fits.
    - Use even dimensions, 30 fps by default, SDR only.
    - Size the bitrate so a 30-minute recording stays under 1 GB, and warn above that.
 8. **Area capture.**
