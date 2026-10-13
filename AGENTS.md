@@ -5,12 +5,13 @@ reel records the screen on macOS — a whole display, one window or a drag-selec
 It's Go on SDL3 (`github.com/Zyko0/go-sdl3`, purego, no cgo) with our own renderer, copied from an earlier project of the author's; the per-file provenance lines say which files. The recording pipeline calls ScreenCaptureKit, AVFoundation and CoreMedia through `purego/objc` in `internal/mac`.
 
 - **Plan:** `docs/plan.md` (M0 scaffold + signing → M1 capture probe → M2 video writer → M3 audio mixer → M4 pause/stop → M5 app UI → M6 trim → M7 soak; each ends with an agent gate and a gate the user runs).
-- **Status:** M0 (scaffold, signing, `devices`, the home window with permissions) built; waiting on the user's gate: `make run`, grant both permissions, rebuild, `make run` again: no new prompt.
+- **Status:** M0 passed (2026-10-13: both permissions granted to the signed Reel.app). M1 (the capture probe) built; its agent gate passed; waiting on the user's probes, which answer the open questions (a)–(d) in the plan.
+- **What the probe found (`probe -self`, 2026-10-13):** a stream delivers on our queue, and its `synchronizationClock` is the host clock (−0.007 ms). Screen frames come at the FPS cap while the content changes, `420v`, and the first one was `complete` (no `started` seen with a window filter: the writer must accept both). System audio is 48 kHz stereo float32 planar in 960-frame (20 ms) buffers, and keeps coming while nothing plays (zeros: 50 buffers a second after the speakers closed), at 47 999.9 Hz with no PTS gaps; it arrives a median 61 ms after its PTS (max 80 ms), so the mixer needs a jitter window over 100 ms. **A covered window isn't drawn, so its capture is all `idle` frames with no pixels**: the beacon keeps itself on top, and recording a covered window of another app may freeze the same way. `CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer` wants the list's exact size (a bigger one fails with −12737).
 
 ## Packages
 | Package | What it does |
 |---|---|
-| `internal/mac` | The macOS bridge (purego/objc, never SDL): permissions (`ScreenAccess`, `MicAccess`, the requests), `Mics` (AVCaptureDevice: uniqueID = ScreenCaptureKit's `microphoneCaptureDeviceID`, transport), `ShareableContent` (displays with their pixel scale, other apps' windows). Every selector, function, constant and protocol it uses is in a table in `mac.go`; `mac_test.go` checks them all against the installed frameworks without touching a device. |
+| `internal/mac` | The macOS bridge (purego/objc, never SDL): permissions (`ScreenAccess`, `MicAccess`, the requests), `Mics` (AVCaptureDevice: uniqueID = ScreenCaptureKit's `microphoneCaptureDeviceID`, transport), `ShareableContent` (displays with their pixel scale, other apps' windows). `StartStream`: one SCStream with the screen, system audio and a mic, delivered as `Sample`s (PTS, frame status, pixel buffer, audio format, PCM) to a handler on our serial queue (autorelease per sample) through a runtime class `ReelStreamOutput`; ScreenCaptureKit's protocols have no runtime objects until something refers to them, so `protocol` registers them. Every selector, function, constant and protocol it uses is in a table in `mac.go`; `mac_test.go` checks them all against the installed frameworks without touching a device. |
 | `internal/draw` | Display list (`draw.List`). Everything that draws emits one; `gfx` consumes it. Logical units, y down. |
 | `internal/text` | Styles, runs and the go-text `Shaper`, the rasterizer, atlas and glyph cache. Embedded Inter and JetBrains Mono; system font fallback and Apple Color Emoji. |
 | `internal/theme` | Color tokens (`Palette`, Light/Dark). Nothing hard-codes colors. |
@@ -18,6 +19,7 @@ It's Go on SDL3 (`github.com/Zyko0/go-sdl3`, purego, no cgo) with our own render
 | `internal/ui` | Input `Event`s, the `Widget` contract, the `Host`, focus layers, the `TextField`. Pure. |
 | `internal/gfx` | GPU renderer: device and window, the uber-shader pipeline, glyph atlases, `Batch`, `RenderImage` (offscreen). |
 | `internal/platform` | SDL loading and init, `QuitOnSignal`, `Wake`. |
+| `internal/area` | The encoded size: points × scale, capped at H.264's 4096×2304 keeping the aspect, even sides. Pure. |
 | `internal/config`, `internal/logx` | Data, log and recordings paths (`REEL_DATA_DIR` overrides all three); a log file per subcommand plus crash output. |
 | `shaders/` | HLSL sources in `src/`, compiled SPIR-V + MSL in `compiled/`, and `manifest.json`. |
 | `cmd/reel` | One file per subcommand, registered in `init()`. Add a file; don't edit `main.go`. No subcommand is `app` (how the bundle starts). |
@@ -46,6 +48,8 @@ make app            # the signed build/Reel.app
 make run            # make app, then open it (user only: it can ask for permissions)
 make render         # offscreen PNG of the home scene -> build/render.png (ARGS="-dark", "-live")
 ./build/reel devices [-all]   # permissions, mics, displays, windows (opens nothing, asks nothing)
+REEL_DATA_DIR=$PWD/.dev/data ./build/reel probe -self -for 6s </dev/null   # agents: records only its own flashing, clicking window (kept on top) and reports what arrives
+./build/reel probe -display main -mic default -for 10s   # user only: a display and a mic (also -window ID, -app Chrome, -system-audio=false)
 REEL_DATA_DIR=$PWD/.dev/data ./build/reel app -exit-after 4s </dev/null >/dev/null 2>&1   # a short window run from an agent
 codesign -d -r- build/Reel.app   # must say certificate leaf
 ```
