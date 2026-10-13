@@ -16,9 +16,11 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/anthonyrego/reel/internal/avsync"
 	"github.com/anthonyrego/reel/internal/mp4"
+	"github.com/anthonyrego/reel/internal/record"
 )
 
 func init() {
@@ -169,10 +171,8 @@ func analyzeAudio(c *checks, path string, f mp4.File, flashes []float64, want ex
 	if !ok {
 		return
 	}
-	if v, ok := f.Track("vide"); ok {
-		c.check(math.Abs(a.Duration-v.Duration) <= 0.05, "audio duration",
-			"%.3f s (video %.3f s)", a.Duration, v.Duration)
-	}
+	_ = a
+	checkAudioLength(c, path)
 	s, err := probeAudio(path)
 	if err != nil {
 		c.check(false, "ffprobe audio", "%v", err)
@@ -389,4 +389,167 @@ func pcmMono(path string, rate int) ([]float32, error) {
 		out[i] = math.Float32frombits(uint32(raw[4*i]) | uint32(raw[4*i+1])<<8 | uint32(raw[4*i+2])<<16 | uint32(raw[4*i+3])<<24)
 	}
 	return out, nil
+}
+
+// analyzePause checks a self-test recording with one pause: it's cut out
+// whole, the picture right after it is the one on screen at the resume
+// (the beacon turned still and blue during the pause), every click stays
+// on its 0.5 s beat through the cut, and sound and picture keep the same
+// offset on both sides of it.
+func analyzePause(c *checks, res record.Result, pauseFor time.Duration, period, frameDur float64) {
+	path := res.Path
+	f, err := mp4.ReadFile(path)
+	if err != nil {
+		c.check(false, "structure", "%v", err)
+		return
+	}
+	c.check(f.FastStart(), "moov before mdat", "%s", strings.Join(f.Top, " "))
+	c.check(len(res.Pauses) == 1, "one pause", "%d cut out", len(res.Pauses))
+	if len(res.Pauses) != 1 {
+		return
+	}
+	p := res.Pauses[0].Seconds()
+	c.check((res.PausedFor-pauseFor).Abs() <= 30*time.Millisecond, "pause length",
+		"%.3f s cut out at %.3f s (paused for %.3f s)", res.PausedFor.Seconds(), p, pauseFor.Seconds())
+	v, okV := f.Track("vide")
+	a, okA := f.Track("soun")
+	if !okV || !okA {
+		c.check(false, "tracks", "video %v, audio %v", okV, okA)
+		return
+	}
+	c.check(math.Abs(v.Duration-res.Duration.Seconds()) <= frameDur, "video duration",
+		"%.3f s (recorded %.3f s)", v.Duration, res.Duration.Seconds())
+	_ = a
+	checkAudioLength(c, path)
+
+	blue := func(rgb [3]float64) bool { return rgb[2] > 150 && rgb[0] < 80 && rgb[1] < 120 }
+	for _, s := range []struct {
+		name string
+		at   float64
+		want bool
+	}{
+		{"before the pause", p - 0.25, false},
+		{"just after it", p + 0.2, true},
+		{"still after it", p + pauseStill.Seconds() - 0.4, true},
+	} {
+		rgb, err := frameColor(path, s.at)
+		if err != nil {
+			c.check(false, s.name, "%v", err)
+			continue
+		}
+		c.check(blue(rgb) == s.want, s.name, "rgb %.0f,%.0f,%.0f at %.2f s (blue wanted: %v)", rgb[0], rgb[1], rgb[2], s.at, s.want)
+	}
+
+	pcm, err := pcmMono(path, 48000)
+	if err != nil {
+		c.check(false, "decode audio", "%v", err)
+		return
+	}
+	clicks := avsync.AudioOnsets(pcm, 48000, 0.02, 0.1)
+	worst := 0.0
+	for i := 1; i < len(clicks); i++ {
+		worst = math.Max(worst, math.Abs(clicks[i]-clicks[i-1]-period))
+	}
+	c.check(len(clicks) > 1 && worst <= 0.03, "click spacing",
+		"%d clicks, each %.0f ms apart give or take %.1f ms (none from inside the pause)", len(clicks), 1000*period, 1000*worst)
+	expected := v.Duration / period
+	c.check(math.Abs(float64(len(clicks))-expected) <= 1.5, "click count", "%d (about %.1f expected)", len(clicks), expected)
+
+	ps, err := luma(path)
+	if err != nil {
+		c.check(false, "frames", "%v", err)
+		return
+	}
+	flashes := avsync.Onsets(ps, avsync.Midway(ps), period/2)
+	var before, after []float64
+	for _, t := range flashes {
+		switch {
+		case t < p:
+			before = append(before, t)
+		case t > p+pauseStill.Seconds():
+			after = append(after, t)
+		}
+	}
+	b := avsync.Summarize(avsync.Pair(before, clicks, period/4))
+	af := avsync.Summarize(avsync.Pair(after, clicks, period/4))
+	if b.N < 3 || af.N < 3 {
+		c.check(false, "A/V across the pause", "%d flashes heard before, %d after", b.N, af.N)
+		return
+	}
+	c.check(math.Abs(af.Median-b.Median) <= 0.010, "A/V across the pause",
+		"click − flash %+.1f ms before (%d), %+.1f ms after (%d)", 1000*b.Median, b.N, 1000*af.Median, af.N)
+}
+
+// frameColor is the mean color of the frame on screen at t seconds: the
+// last one presented at or before t. (ffmpeg -ss t gives the first frame
+// at or after t, which across a still stretch of a recording is the wrong
+// one: frames come only when the screen changes.)
+func frameColor(path string, t float64) ([3]float64, error) {
+	times, err := frameTimes(path)
+	if err != nil {
+		return [3]float64{}, err
+	}
+	shown := ""
+	for _, s := range times {
+		if v, _ := strconv.ParseFloat(s, 64); v <= t {
+			shown = s
+		}
+	}
+	if shown == "" {
+		return [3]float64{}, fmt.Errorf("no frame by %.3f s", t)
+	}
+	raw, err := exec.Command("ffmpeg", "-v", "error", "-ss", shown, "-i", path,
+		"-frames:v", "1", "-vf", "scale=8:8", "-f", "rawvideo", "-pix_fmt", "rgb24", "-").Output()
+	if err != nil {
+		return [3]float64{}, fmt.Errorf("ffmpeg: %w", err)
+	}
+	if len(raw) < 3 {
+		return [3]float64{}, errors.New("ffmpeg: no frame")
+	}
+	var sum [3]float64
+	for i := 0; i+2 < len(raw); i += 3 {
+		for k := range 3 {
+			sum[k] += float64(raw[i+k])
+		}
+	}
+	n := float64(len(raw) / 3)
+	return [3]float64{sum[0] / n, sum[1] / n, sum[2] / n}, nil
+}
+
+// playedDuration is how long a stream plays ("v:0", "a:0"), as ffprobe
+// reads it through the edit list: an AAC track also holds the encoder's
+// priming samples (about 44 ms), which the edit list skips.
+func playedDuration(path, stream string) (float64, error) {
+	out, err := exec.Command("ffprobe", "-v", "error", "-select_streams", stream,
+		"-show_entries", "stream=duration", "-of", "csv=p=0", path).Output()
+	if err != nil {
+		return 0, fmt.Errorf("ffprobe: %w", err)
+	}
+	return strconv.ParseFloat(strings.TrimSpace(string(out)), 64)
+}
+
+// checkAudioLength checks the audio plays as long as the video.
+func checkAudioLength(c *checks, path string) {
+	a, errA := playedDuration(path, "a:0")
+	v, errV := playedDuration(path, "v:0")
+	if errA != nil || errV != nil {
+		c.check(false, "audio duration", "%v %v", errA, errV)
+		return
+	}
+	c.check(math.Abs(a-v) <= 0.035, "audio duration", "plays %.3f s (video %.3f s)", a, v)
+}
+
+// frameTimes are the video frames' presentation times, as ffprobe prints
+// them, in order.
+func frameTimes(path string) ([]string, error) {
+	out, err := exec.Command("ffprobe", "-v", "error", "-select_streams", "v:0",
+		"-show_entries", "frame=pts_time", "-of", "csv=p=0", path).Output()
+	if err != nil {
+		return nil, fmt.Errorf("ffprobe frames: %w", err)
+	}
+	var ts []string
+	for _, f := range strings.Fields(string(out)) {
+		ts = append(ts, strings.TrimSuffix(f, ","))
+	}
+	return ts, nil
 }

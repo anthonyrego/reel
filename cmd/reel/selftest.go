@@ -11,11 +11,13 @@ package main
 // so resampling and drift correction run without a device.
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"math"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"time"
 
 	"github.com/Zyko0/go-sdl3/sdl"
@@ -51,6 +53,12 @@ func runSelftest(args []string) error {
 	fragment := fs.Duration("fragment", 0, "write a movie fragment this often (0: the default, 5s; -1s: none)")
 	fps := fs.Int("fps", 30, "the most frames a second")
 	out := fs.String("out", "", "the MP4 to write (default: <recordings>/selftest-<time>.mp4)")
+	pauseAt := fs.Duration("pause-at", 0, "pause this far in (0: never); the beacon turns still and blue a second into the pause")
+	pauseFor := fs.Duration("pause-for", 3*time.Second, "with -pause-at: how long to pause")
+	hideAt := fs.Duration("hide-at", 0, "hide the recorded window this far in (0: never): the recording pauses until it shows")
+	interruptAt := fs.Duration("interrupt-at", 0, "end the recording this far in as if the stream had stopped by itself (0: never)")
+	minimize := fs.Bool("minimize", false, "with -hide-at: minimize the window instead of hiding it")
+	showAt := fs.Duration("show-at", 0, "with -hide-at: show the window again this far in (0: never)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -113,6 +121,21 @@ func runSelftest(args []string) error {
 		return err
 	}
 	refresh := displayRefresh(a.window.Handle())
+	var hide, show atomic.Bool
+	b.onWake = func() {
+		if hide.Swap(false) {
+			if *minimize {
+				a.window.Handle().Minimize()
+			} else {
+				a.window.Handle().Hide()
+			}
+		}
+		if show.Swap(false) {
+			a.window.Handle().Restore()
+			a.window.Handle().Show()
+			a.window.Handle().Raise()
+		}
+	}
 
 	type outcome struct {
 		res record.Result
@@ -125,6 +148,27 @@ func runSelftest(args []string) error {
 		if err != nil {
 			got <- outcome{err: err}
 			return
+		}
+		if *pauseAt > 0 {
+			go pauseBeacon(r, b, *pauseAt, *pauseFor)
+		}
+		if *interruptAt > 0 {
+			go func() {
+				time.Sleep(*interruptAt)
+				r.Interrupt(errors.New("the stream stopped (simulated)"))
+			}()
+		}
+		if *hideAt > 0 {
+			go func() {
+				time.Sleep(*hideAt)
+				hide.Store(true)
+				platform.Wake()
+				if *showAt > *hideAt {
+					time.Sleep(*showAt - *hideAt)
+					show.Store(true)
+					platform.Wake()
+				}
+			}()
 		}
 		stopMic := func() {}
 		if *fakeMic && !*videoOnly {
@@ -145,6 +189,9 @@ func runSelftest(args []string) error {
 	if o.err != nil {
 		return o.err
 	}
+	if o.res.StoppedBy != nil {
+		fmt.Printf("the stream ended by itself: %v\n", o.res.StoppedBy)
+	}
 	fmt.Printf("wrote %s: %.3f s, %d frames, %d dropped, %d skipped; audio %.3f s, %d frames lost\n",
 		o.res.Path, o.res.Duration.Seconds(), o.res.Frames, o.res.Dropped, o.res.Skipped,
 		float64(o.res.AudioFrames)/mixer.Rate, o.res.AudioLost)
@@ -159,6 +206,10 @@ func runSelftest(args []string) error {
 	c.check(o.res.Dropped == 0, "nothing dropped", "%d frames dropped", o.res.Dropped)
 	if !*videoOnly {
 		c.check(o.res.AudioLost == 0, "no audio lost", "%d frames lost", o.res.AudioLost)
+	}
+	if *pauseAt > 0 {
+		analyzePause(c, o.res, *pauseFor, beaconPeriod.Seconds(), 1/float64(*fps))
+		return c.result()
 	}
 	analyzeFile(c, o.res.Path, expect{
 		duration: o.res.Duration.Seconds(), frameDur: 1 / float64(*fps), period: beaconPeriod.Seconds(),
@@ -230,3 +281,24 @@ func feedFakeMic(r *record.Recorder, startHost int64, ppm float64) (stop func())
 	}()
 	return func() { close(done); <-finished }
 }
+
+// pauseBeacon pauses the recording at pauseAt for pauseFor. A second into
+// the pause the beacon turns still and blue, and stays so for two seconds
+// after the recording resumes: the screen changed during the pause and is
+// still after it, so only the frame written again at the resume can show
+// the blue. Then it flashes again.
+func pauseBeacon(r *record.Recorder, b *beacon, pauseAt, pauseFor time.Duration) {
+	time.Sleep(pauseAt)
+	r.Pause()
+	time.Sleep(time.Second)
+	b.frozen.Store(true)
+	platform.Wake() // draw the blue once
+	time.Sleep(pauseFor - time.Second)
+	r.Resume()
+	time.Sleep(pauseStill)
+	b.frozen.Store(false)
+	platform.Wake()
+}
+
+// pauseStill is how long the beacon stays still after a resume.
+const pauseStill = 2 * time.Second

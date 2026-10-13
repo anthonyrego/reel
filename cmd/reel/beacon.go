@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"sync/atomic"
 	"time"
 	"unsafe"
 
@@ -39,6 +40,11 @@ type beacon struct {
 
 	start     time.Time
 	startHost int64 // start on the host clock (ns), for fake sources
+	// frozen, while set, draws a still blue window (the pause test).
+	frozen atomic.Bool
+	// onWake runs on the main thread when the loop is woken (tests that
+	// change the window itself).
+	onWake func()
 	// after, when set, runs once on the main thread a second in (logs).
 	after  func()
 	audio  *sdl.AudioStream
@@ -120,6 +126,14 @@ func (b *beacon) draw(c *ui.Ctx, l *draw.List, w, h float32) {
 		b.after()
 		b.after = nil
 	}
+	if b.frozen.Load() {
+		// Still and blue, drawn once: ScreenCaptureKit sends a frame for
+		// every present, even an identical one, so the window presents
+		// nothing more until it thaws, and only a frame written again can
+		// show the blue.
+		l.Rect(draw.Rect{W: w, H: h}, draw.RGB(0x1040e0), draw.Radii{})
+		return
+	}
 	bg, fg := draw.RGB(0x101010), draw.RGB(0xf0f0f0)
 	if b.lit(c.Now) {
 		bg, fg = fg, bg
@@ -134,8 +148,12 @@ func (b *beacon) draw(c *ui.Ctx, l *draw.List, w, h float32) {
 }
 
 func (b *beacon) event(c *ui.Ctx, ev ui.Event) bool { return false }
-func (b *beacon) animating() bool                   { return true }
-func (b *beacon) woke()                             {}
+func (b *beacon) animating() bool                   { return !b.frozen.Load() }
+func (b *beacon) woke() {
+	if b.onWake != nil {
+		b.onWake()
+	}
+}
 
 func (b *beacon) close() {
 	if b.audio != nil && !b.closed {
