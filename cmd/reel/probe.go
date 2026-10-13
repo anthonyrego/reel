@@ -145,13 +145,13 @@ func probeSelf(cfg mac.StreamConfig, dur, clicksFor time.Duration) error {
 	}
 	b := newBeacon(500*time.Millisecond, clicksFor)
 	defer b.close()
-	a.scene = b
+	a.setScene(b)
 	// A process started from a terminal doesn't come to the front, and a
 	// covered window is never drawn: keep the beacon above everything.
 	a.window.Handle().SetAlwaysOnTop(true)
 	a.window.Handle().Show()
 	a.window.Handle().Raise()
-	a.render()
+	a.render(a.main)
 	id, err := platform.WindowNumber(a.window.Handle())
 	if err != nil {
 		return err

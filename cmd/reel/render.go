@@ -16,13 +16,15 @@ import (
 
 	"github.com/Zyko0/go-sdl3/sdl"
 
+	"github.com/anthonyrego/reel/internal/config"
 	"github.com/anthonyrego/reel/internal/draw"
 	"github.com/anthonyrego/reel/internal/gfx"
-	"github.com/anthonyrego/reel/internal/mac"
 	"github.com/anthonyrego/reel/internal/platform"
 	"github.com/anthonyrego/reel/internal/text"
 	"github.com/anthonyrego/reel/internal/theme"
 	"github.com/anthonyrego/reel/internal/ui"
+	"github.com/anthonyrego/reel/internal/ui/controls"
+	"github.com/anthonyrego/reel/internal/ui/home"
 )
 
 func init() {
@@ -99,16 +101,23 @@ func (o *offscreen) image(s scene, w, h, scale float32, pal theme.Palette) (*ima
 func runRender(args []string) error {
 	fs := flag.NewFlagSet("render", flag.ContinueOnError)
 	out := fs.String("out", "", "PNG to write (required)")
-	width := fs.Float64("width", 760, "window width, logical units")
-	height := fs.Float64("height", 560, "window height, logical units")
+	width := fs.Float64("width", 720, "window width, logical units")
+	height := fs.Float64("height", 640, "window height, logical units")
 	scale := fs.Float64("scale", 2, "pixels per logical unit")
 	dark := fs.Bool("dark", false, "use the dark palette")
-	live := fs.Bool("live", false, "show this machine's permissions and devices (needs no permission; lists windows only with Screen Recording)")
+	state := fs.String("state", "idle", "the main window's sample state: "+sampleNames())
+	hover := fs.String("hover", "", "move the pointer here first: X,Y in logical units")
+	sceneName := fs.String("scene", "home", "what to draw: home (the main window), hud (the floating controls, at -state live or paused) or area (the area picker over a made-up desktop)")
+	live := fs.Bool("live", false, "draw this Mac's real state (permissions, displays, mics, recordings) through the controller, menus closed")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if *out == "" {
 		return fmt.Errorf("-out is required")
+	}
+	sample, ok := samples[*state]
+	if !ok {
+		return fmt.Errorf("-state %q: one of %s", *state, sampleNames())
 	}
 	o, done, err := newOffscreen(false)
 	if err != nil {
@@ -116,39 +125,65 @@ func runRender(args []string) error {
 	}
 	defer done()
 
-	h := newHome(func() {})
+	now := time.Now()
+	st, menu := sample(now)
+	v := home.New()
+	v.St, v.Act = st, sampleActions()
 	if *live {
-		h.st = gatherHome()
-	} else {
-		h.st = sampleHome()
+		paths, err := config.Resolve()
+		if err != nil {
+			return err
+		}
+		c := newController(paths, v)
+		c.refresh()
+		for deadline := time.Now().Add(10 * time.Second); c.gathering && time.Now().Before(deadline); {
+			time.Sleep(50 * time.Millisecond)
+			c.woke() // runs what the refresh posted
+		}
+		c.show()
+		menu = ""
 	}
-	h.have = true
-	img, err := o.image(h, float32(*width), float32(*height), float32(*scale), theme.For(*dark))
+	pal := theme.For(*dark)
+	w, h := float32(*width), float32(*height)
+	c := &ui.Ctx{Text: o.shaper, Pal: pal, Scale: float32(*scale), Now: now}
+	// Lay it out once, so the pointer below finds the controls.
+	var scratch draw.List
+	v.Draw(c, &scratch, w, h)
+	v.OpenMenu(menu)
+	if *hover != "" {
+		var x, y float32
+		if _, err := fmt.Sscanf(*hover, "%f,%f", &x, &y); err != nil {
+			return fmt.Errorf("-hover %q: want X,Y", *hover)
+		}
+		v.Draw(c, &scratch, w, h)
+		v.Event(c, ui.Event{Kind: ui.PointerMove, Pos: draw.Point{X: x, Y: y}})
+	}
+	var sc scene = &homeScene{v: v}
+	switch *sceneName {
+	case "hud":
+		c := &controller{v: v}
+		sc, w, h = &hud{c: c, hits: controls.NewHits()}, hudW, hudH
+		pal.Background = draw.RGB(0x6a7f9a) // a desktop to float over
+	case "area":
+		tex, err := sampleDesktop(o, int(w*float32(*scale)), int(h*float32(*scale)))
+		if err != nil {
+			return err
+		}
+		defer o.device.ReleaseTexture(tex)
+		as := &areaScene{hits: controls.NewHits()}
+		if *hover != "" {
+			as.have, as.from, as.to = true, draw.Point{X: w * 0.22, Y: h * 0.25}, draw.Point{X: w * 0.7, Y: h * 0.68}
+		}
+		sc = as
+	case "home":
+	default:
+		return fmt.Errorf("-scene %q: home, hud or area", *sceneName)
+	}
+	img, err := o.image(sc, w, h, float32(*scale), pal)
 	if err != nil {
 		return err
 	}
 	return writePNG(*out, img)
-}
-
-// sampleHome is a fixed state for renders: one permission missing, two
-// displays, three mics.
-func sampleHome() homeState {
-	return homeState{
-		screen: mac.PermissionGranted,
-		mic:    mac.PermissionUnknown,
-		content: mac.Content{
-			Displays: []mac.Display{
-				{ID: 1, Frame: mac.Rect{W: 1728, H: 1117}, Scale: 2},
-				{ID: 2, Frame: mac.Rect{X: 1728, W: 3008, H: 1692}, Scale: 2},
-			},
-			Windows: make([]mac.Window, 14),
-		},
-		mics: []mac.Mic{
-			{ID: "BuiltInMicrophoneDevice", Name: "MacBook Pro Microphone", Transport: mac.TransportBuiltIn, Default: true},
-			{ID: "usb-1", Name: "Shure MV7", Transport: mac.TransportUSB},
-			{ID: "bt-1", Name: "AirPods Pro", Transport: mac.TransportBluetooth},
-		},
-	}
 }
 
 func writePNG(path string, img image.Image) error {
@@ -161,4 +196,30 @@ func writePNG(path string, img image.Image) error {
 		return err
 	}
 	return f.Close()
+}
+
+// sampleDesktop registers a made-up desktop (a gradient with a few
+// window-like cards) as the area picker's still.
+func sampleDesktop(o *offscreen, pw, ph int) (*sdl.GPUTexture, error) {
+	pix := make([]byte, pw*ph*4)
+	for y := range ph {
+		for x := range pw {
+			i := (y*pw + x) * 4
+			pix[i], pix[i+1], pix[i+2], pix[i+3] = byte(40+60*x/pw), byte(70+80*y/ph), byte(150+60*x/pw), 255
+			for _, r := range [][4]int{{pw / 10, ph / 8, pw / 2, ph / 2}, {pw / 2, ph / 3, pw * 9 / 10, ph * 5 / 6}} {
+				if x >= r[0] && x < r[2] && y >= r[1] && y < r[3] {
+					pix[i], pix[i+1], pix[i+2] = 245, 245, 247
+					if y < r[1]+ph/30 {
+						pix[i], pix[i+1], pix[i+2] = 225, 225, 230
+					}
+				}
+			}
+		}
+	}
+	tex, err := gfx.UploadTexture(o.device, sdl.GPU_TEXTUREFORMAT_R8G8B8A8_UNORM, uint32(pw), uint32(ph), pix)
+	if err != nil {
+		return nil, err
+	}
+	o.renderer.SetImage(areaImage, tex)
+	return tex, nil
 }

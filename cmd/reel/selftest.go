@@ -75,7 +75,12 @@ func runSelftest(args []string) error {
 	}
 	defer logf.Close()
 	if *out == "" {
-		*out = filepath.Join(paths.Recordings, "selftest-"+time.Now().Format("20060102-150405")+".mp4")
+		// Beside the recordings, not among them: the app lists those.
+		dir := filepath.Join(paths.Data, "selftests")
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return err
+		}
+		*out = filepath.Join(dir, "selftest-"+time.Now().Format("20060102-150405")+".mp4")
 	}
 
 	a, err := openWindow(gfx.WindowConfig{Title: "Reel self-test", Width: 480, Height: 300, Hidden: true}, false)
@@ -92,12 +97,12 @@ func runSelftest(args []string) error {
 	}
 	b := newBeacon(beaconPeriod, clicksFor)
 	defer b.close()
-	a.scene = b
+	a.setScene(b)
 	// A covered window isn't drawn: keep the beacon above everything.
 	a.window.Handle().SetAlwaysOnTop(true)
 	a.window.Handle().Show()
 	a.window.Handle().Raise()
-	a.render()
+	a.render(a.main)
 	id, err := platform.WindowNumber(a.window.Handle())
 	if err != nil {
 		return err

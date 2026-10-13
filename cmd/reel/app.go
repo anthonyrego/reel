@@ -1,11 +1,13 @@
 package main
 
-// The window: SDL, the GPU device, the text pipeline and the event loop.
-// The loop sleeps in WaitEvent while nothing changes, so an idle window
-// renders no frames. Other goroutines publish state and wake the loop.
+// The app's windows: SDL, the GPU device, the text pipeline and the event
+// loop. The main window is one surface; the floating controls while
+// recording and the area selection are others, drawn by the same renderer.
+// The loop sleeps in WaitEvent while nothing changes, so idle windows
+// render no frames. Other goroutines publish state and wake the loop.
 //
 // Copied from an earlier project of the author's (without
-// the voice session and the overlay).
+// the voice session and the overlay), for several windows.
 
 import (
 	"flag"
@@ -21,10 +23,12 @@ import (
 	"github.com/anthonyrego/reel/internal/draw"
 	"github.com/anthonyrego/reel/internal/gfx"
 	"github.com/anthonyrego/reel/internal/logx"
+	"github.com/anthonyrego/reel/internal/mac"
 	"github.com/anthonyrego/reel/internal/platform"
 	"github.com/anthonyrego/reel/internal/text"
 	"github.com/anthonyrego/reel/internal/theme"
 	"github.com/anthonyrego/reel/internal/ui"
+	"github.com/anthonyrego/reel/internal/ui/home"
 )
 
 func init() {
@@ -43,25 +47,40 @@ type scene interface {
 	woke()
 }
 
-// winApp is a window, its renderer and the text pipeline, drawing a scene.
-// All of its methods run on the main thread.
+// surface is a window and the scene it shows.
+type surface struct {
+	win     *gfx.Window
+	id      sdl.WindowID
+	scene   scene
+	list    draw.List
+	batch   gfx.Batch
+	stalled bool // the last frame got no swapchain texture (minimized or covered)
+	more    bool // the scene asked for another frame (ctx.Animate)
+	dirty   bool
+	// clear is the window's background (zero: the palette's).
+	clear draw.Color
+	// onClose, when set, runs on a close request instead of quitting.
+	onClose func()
+	// transparent clears frames to nothing: the window (made see-through
+	// by platform.Float) draws its own shape.
+	transparent bool
+}
+
+// winApp is the windows, their renderer and the text pipeline. All of its
+// methods run on the main thread.
 type winApp struct {
 	device   *sdl.GPUDevice
-	window   *gfx.Window
 	renderer *gfx.Renderer
 	glyphs   *text.GlyphCache
 	shaper   *text.Shaper
-	list     draw.List
-	batch    gfx.Batch
 	pal      theme.Palette
 	// theme is the theme asked for (see dark): "" follows the system.
 	theme string
-	scene scene
-	// scale is the display scale glyphs were last rasterized for.
-	scale   float32
-	stalled bool // the last frame got no swapchain texture (minimized or covered)
-	// more is set by a scene's ctx.Animate during a frame.
-	more bool
+
+	main     *surface
+	surfaces []*surface
+	// window is the main window.
+	window *gfx.Window
 
 	frames  atomic.Int64
 	cleanup []func()
@@ -76,7 +95,7 @@ func runApp(args []string) error {
 	fs := flag.NewFlagSet("app", flag.ContinueOnError)
 	debug := fs.Bool("debug", false, "enable GPU validation")
 	exitAfter := fs.Duration("exit-after", 0, "quit by itself after this long (unattended runs)")
-	size := fs.String("size", "760x560", "window size in points, WxH")
+	size := fs.String("size", "720x640", "window size in points, WxH")
 	themeMode := fs.String("theme", "", "the window's theme, light|dark (default: the system's)")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -103,7 +122,7 @@ func runApp(args []string) error {
 		return err
 	}
 	defer a.close()
-	a.window.Handle().SetMinimumSize(520, 420)
+	a.window.Handle().SetMinimumSize(560, 520)
 	switch *themeMode {
 	case "", themeLight, themeDark:
 		a.theme = *themeMode
@@ -112,14 +131,28 @@ func runApp(args []string) error {
 	}
 	a.pal = theme.For(a.dark())
 
-	h := newHome(func() { platform.Wake() })
-	a.scene = h
-	h.refresh()
+	v := home.New()
+	c := newController(paths, v)
+	a.setScene(&homeScene{v: v, woken: c.woke, focused: c.refresh})
+	hud := newHUD(a, c)
+	c.onLive = hud.live
+	c.selectArea = func() { selectArea(a, c) }
+	c.show()
+	c.refresh()
+	if err := platform.OnHotKey(func() { c.post(c.hotKey) }); err != nil {
+		slog.Warn("app: "+platform.HotKeyName+" won't work", "err", err)
+	}
+	if err := mac.OnSleep(func(sleep bool) { c.post(func() { c.sleeping(sleep) }) }); err != nil {
+		slog.Warn("app: sleep notifications", "err", err)
+	}
 	a.window.Handle().Show()
-	return a.run(*exitAfter)
+	err = a.run(*exitAfter)
+	c.quit() // a recording in progress is finished, not lost
+	return err
 }
 
-// openWindow sets up SDL, the GPU device, a window and the text pipeline.
+// openWindow sets up SDL, the GPU device, the main window and the text
+// pipeline.
 func openWindow(cfg gfx.WindowConfig, debug bool) (*winApp, error) {
 	var err error
 	if err := platform.Init(platform.Foreground); err != nil {
@@ -134,10 +167,6 @@ func openWindow(cfg gfx.WindowConfig, debug bool) (*winApp, error) {
 		return fail(err)
 	}
 	a.cleanup = append(a.cleanup, a.device.Destroy)
-	if a.window, err = gfx.NewWindow(a.device, cfg); err != nil {
-		return fail(err)
-	}
-	a.cleanup = append(a.cleanup, a.window.Destroy)
 	if a.renderer, err = gfx.NewRenderer(a.device); err != nil {
 		return fail(err)
 	}
@@ -146,23 +175,61 @@ func openWindow(cfg gfx.WindowConfig, debug bool) (*winApp, error) {
 		return fail(err)
 	}
 	a.renderer.SetGlyphCache(a.glyphs)
-	a.batch.Glyphs = a.glyphs
-	a.scale = a.window.Scale()
-	slog.Info("gpu", "driver", a.device.Driver(), "sdl", sdl.GetVersion().String(), "scale", a.window.Scale(), "density", a.window.PixelDensity())
+	s, err := a.addWindow(cfg, nil)
+	if err != nil {
+		return fail(err)
+	}
+	a.main, a.window = s, s.win
+	slog.Info("gpu", "driver", a.device.Driver(), "sdl", sdl.GetVersion().String(), "scale", s.win.Scale(), "density", s.win.PixelDensity())
 	return a, nil
 }
 
+// addWindow opens another window showing sc.
+func (a *winApp) addWindow(cfg gfx.WindowConfig, sc scene) (*surface, error) {
+	w, err := gfx.NewWindow(a.device, cfg)
+	if err != nil {
+		return nil, err
+	}
+	id, err := w.Handle().ID()
+	if err != nil {
+		w.Destroy()
+		return nil, err
+	}
+	s := &surface{win: w, id: id, scene: sc, dirty: true}
+	s.batch.Glyphs = a.glyphs
+	a.surfaces = append(a.surfaces, s)
+	return s, nil
+}
+
+// removeWindow closes a window opened with addWindow.
+func (a *winApp) removeWindow(s *surface) {
+	for i, o := range a.surfaces {
+		if o == s {
+			a.surfaces = append(a.surfaces[:i], a.surfaces[i+1:]...)
+			s.win.Destroy()
+			return
+		}
+	}
+}
+
+// setScene sets what the main window shows.
+func (a *winApp) setScene(sc scene) {
+	a.main.scene, a.main.dirty = sc, true
+}
+
 func (a *winApp) close() {
+	for _, s := range a.surfaces {
+		s.win.Destroy()
+	}
+	a.surfaces = nil
 	for i := len(a.cleanup) - 1; i >= 0; i-- {
 		a.cleanup[i]()
 	}
 	a.cleanup = nil
 }
 
-func (a *winApp) win() *gfx.Window { return a.window }
-
-// dark reports whether the window draws dark: the theme it was asked for,
-// else the system's.
+// dark reports whether the windows draw dark: the theme asked for, else
+// the system's.
 func (a *winApp) dark() bool {
 	switch a.theme {
 	case themeLight:
@@ -173,13 +240,39 @@ func (a *winApp) dark() bool {
 	return sdl.GetSystemTheme() == sdl.SYSTEM_THEME_DARK
 }
 
-// ctx is the widget context for this frame.
-func (a *winApp) ctx() *ui.Ctx {
-	return &ui.Ctx{Text: a.shaper, Pal: a.pal, Scale: a.win().Scale(), Now: time.Now(), Animate: func() { a.more = true }}
+// ctx is the widget context for a surface's frame.
+func (a *winApp) ctx(s *surface) *ui.Ctx {
+	return &ui.Ctx{Text: a.shaper, Pal: a.pal, Scale: s.win.Scale(), Now: time.Now(), Animate: func() { s.more = true }}
 }
 
-// run is the event loop. It sleeps in WaitEvent while nothing changes, so an
-// idle window renders no frames; while the scene animates it renders
+// surfaceOf is the surface an event belongs to (the main one for events
+// that name no window).
+func (a *winApp) surfaceOf(ev *sdl.Event) *surface {
+	var id sdl.WindowID
+	switch t := ev.Type; {
+	case t >= sdl.EVENT_WINDOW_FIRST && t <= sdl.EVENT_WINDOW_LAST:
+		id = ev.WindowEvent().WindowID
+	case t == sdl.EVENT_MOUSE_MOTION:
+		id = ev.MouseMotionEvent().WindowID
+	case t == sdl.EVENT_MOUSE_BUTTON_DOWN || t == sdl.EVENT_MOUSE_BUTTON_UP:
+		id = ev.MouseButtonEvent().WindowID
+	case t == sdl.EVENT_MOUSE_WHEEL:
+		id = ev.MouseWheelEvent().WindowID
+	case t == sdl.EVENT_KEY_DOWN || t == sdl.EVENT_KEY_UP:
+		id = ev.KeyboardEvent().WindowID
+	case t == sdl.EVENT_TEXT_INPUT:
+		id = ev.TextInputEvent().WindowID
+	}
+	for _, s := range a.surfaces {
+		if s.id == id {
+			return s
+		}
+	}
+	return a.main
+}
+
+// run is the event loop. It sleeps in WaitEvent while nothing changes, so
+// idle windows render no frames; while a scene animates the loop renders
 // continuously, paced by the swapchain (vsync).
 func (a *winApp) run(exitAfter time.Duration) error {
 	start := time.Now()
@@ -197,7 +290,7 @@ func (a *winApp) run(exitAfter time.Duration) error {
 	// purego never frees callbacks.
 	watch := sdl.NewEventFilter(func(e *sdl.Event) bool {
 		if e.Type == sdl.EVENT_WINDOW_EXPOSED && e.WindowEvent().Data1 == 1 {
-			a.render()
+			a.render(a.surfaceOf(e))
 		}
 		return true
 	})
@@ -205,17 +298,29 @@ func (a *winApp) run(exitAfter time.Duration) error {
 		return err
 	}
 
-	dirty := true
+	all := func() {
+		for _, s := range a.surfaces {
+			s.dirty = true
+		}
+	}
 	for {
-		animating := a.more || a.scene.animating()
-		if dirty || animating {
-			a.render()
-			dirty = false
-			animating = a.more || a.scene.animating()
+		animating, stalled := false, false
+		for _, s := range a.surfaces {
+			if s.scene == nil {
+				continue
+			}
+			if s.dirty || s.more || s.scene.animating() {
+				a.render(s)
+				s.dirty = false
+			}
+			if s.more || s.scene.animating() {
+				animating = true
+				stalled = stalled || s.stalled
+			}
 		}
 		var ev sdl.Event
 		switch {
-		case animating && a.stalled:
+		case animating && stalled:
 			// No swapchain texture (minimized or covered): don't spin.
 			if !sdl.WaitEventTimeout(&ev, 50) {
 				continue
@@ -231,35 +336,48 @@ func (a *winApp) run(exitAfter time.Duration) error {
 		}
 		for {
 			switch ev.Type {
-			case sdl.EVENT_QUIT, sdl.EVENT_WINDOW_CLOSE_REQUESTED:
+			case sdl.EVENT_QUIT:
 				return quit()
+			case sdl.EVENT_WINDOW_CLOSE_REQUESTED:
+				s := a.surfaceOf(&ev)
+				if s == a.main || s.onClose == nil {
+					return quit()
+				}
+				s.onClose()
 			case sdl.EVENT_SYSTEM_THEME_CHANGED:
 				a.pal = theme.For(a.dark())
-				dirty = true
+				all()
 			case sdl.EVENT_USER:
 				platform.WakeTaken()
-				a.scene.woke()
-				dirty = true
+				// A woken scene may open or close windows: walk a copy.
+				for _, s := range append([]*surface(nil), a.surfaces...) {
+					if s.scene != nil {
+						s.scene.woke()
+					}
+				}
+				all()
 			case sdl.EVENT_WINDOW_DISPLAY_SCALE_CHANGED:
-				// Glyphs are keyed by pixel size; drop the old scale's so
-				// the atlas refills at the new one.
-				if sc := a.win().Scale(); sc != a.scale {
-					a.glyphs.Reset()
-					a.scale = sc
-				}
-				dirty = true
+				// Glyphs are keyed by pixel size: drop the old scale's.
+				a.glyphs.Reset()
+				all()
 			case sdl.EVENT_WINDOW_FOCUS_GAINED:
-				// Back from System Settings, perhaps with a permission.
-				if r, ok := a.scene.(interface{ refresh() }); ok {
-					r.refresh()
+				s := a.surfaceOf(&ev)
+				// Back from System Settings (perhaps with a permission) or
+				// from other apps (windows come and go).
+				if f, ok := s.scene.(interface{ focus() }); ok {
+					f.focus()
 				}
-				dirty = true
+				s.dirty = true
 			case sdl.EVENT_WINDOW_SHOWN, sdl.EVENT_WINDOW_RESTORED, sdl.EVENT_WINDOW_EXPOSED,
 				sdl.EVENT_WINDOW_PIXEL_SIZE_CHANGED, sdl.EVENT_WINDOW_DISPLAY_CHANGED:
-				dirty = true
+				a.surfaceOf(&ev).dirty = true
 			default:
-				if uev, ok := a.translate(&ev); ok && a.scene.event(a.ctx(), uev) {
-					dirty = true
+				s := a.surfaceOf(&ev)
+				if s.scene == nil {
+					break
+				}
+				if uev, ok := a.translate(s, &ev); ok && s.scene.event(a.ctx(s), uev) {
+					s.dirty = true
 				}
 			}
 			if !sdl.PollEvent(&ev) {
@@ -269,37 +387,46 @@ func (a *winApp) run(exitAfter time.Duration) error {
 	}
 }
 
-// render draws and presents one frame.
-func (a *winApp) render() {
-	win := a.win()
+// render draws and presents one frame of a surface.
+func (a *winApp) render(s *surface) {
+	if s.scene == nil {
+		return
+	}
 	cmd, err := a.device.AcquireCommandBuffer()
 	if err != nil {
 		slog.Error("acquire command buffer", "err", err)
 		return
 	}
-	sc, err := cmd.WaitAndAcquireGPUSwapchainTexture(win.Handle())
+	sc, err := cmd.WaitAndAcquireGPUSwapchainTexture(s.win.Handle())
 	if err != nil || sc == nil || sc.Texture == nil {
-		// Minimized or occluded: nothing to draw into.
+		// Minimized, hidden or occluded: nothing to draw into.
 		cmd.Submit()
-		a.stalled = true
+		s.stalled = true
 		return
 	}
-	a.stalled = false
+	s.stalled = false
 	pw, ph := int(sc.Width), int(sc.Height)
-	scale := win.Scale()
+	scale := s.win.Scale()
 	w, h := float32(pw)/scale, float32(ph)/scale
-	a.more = false
-	a.list.Reset()
-	a.scene.draw(a.ctx(), &a.list, w, h)
-	a.batch.Reset(pw, ph)
-	a.batch.AddList(&a.list, scale)
-	if err := a.renderer.Prepare(cmd, &a.batch); err != nil {
+	s.more = false
+	s.list.Reset()
+	s.scene.draw(a.ctx(s), &s.list, w, h)
+	s.batch.Reset(pw, ph)
+	s.batch.AddList(&s.list, scale)
+	if err := a.renderer.Prepare(cmd, &s.batch); err != nil {
 		// Nothing was uploaded (dirty regions stay dirty for the next
 		// frame); present a cleared frame rather than draw stale data.
 		slog.Error("prepare", "err", err)
-		a.batch.Reset(pw, ph)
+		s.batch.Reset(pw, ph)
 	}
-	if err := a.renderer.Draw(cmd, sc.Texture, win.SwapchainFormat(), pw, ph, a.pal.Background, &a.batch); err != nil {
+	clear := a.pal.Background
+	switch {
+	case s.transparent:
+		clear = draw.Color{}
+	case s.clear.A != 0:
+		clear = s.clear
+	}
+	if err := a.renderer.Draw(cmd, sc.Texture, s.win.SwapchainFormat(), pw, ph, clear, &s.batch); err != nil {
 		slog.Error("draw", "err", err)
 	}
 	if err := cmd.Submit(); err != nil {

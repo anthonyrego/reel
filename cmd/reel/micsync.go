@@ -132,10 +132,10 @@ func runMicsync(args []string) error {
 	b := newBeacon(time.Second, *dur)
 	b.gain = 0.5 // −6 dBFS: the mic hears it across the room
 	defer b.close()
-	a.scene = b
+	a.setScene(b)
 	a.window.Handle().SetAlwaysOnTop(true)
 	a.window.Handle().Show()
-	a.render()
+	a.render(a.main)
 
 	var tap, heardMic heard
 	cfg := mac.StreamConfig{

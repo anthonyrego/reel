@@ -81,9 +81,9 @@ func uiKey(k sdl.Keycode) ui.Key {
 // translate converts an SDL event to a ui event in logical window
 // coordinates (event coordinates times PixelDensity over the display
 // scale). ok is false for events the view doesn't take.
-func (a *winApp) translate(ev *sdl.Event) (ui.Event, bool) {
+func (a *winApp) translate(s *surface, ev *sdl.Event) (ui.Event, bool) {
 	pos := func(x, y float32) draw.Point {
-		lx, ly := a.win().ToLogical(x, y)
+		lx, ly := s.win.ToLogical(x, y)
 		return draw.Point{X: lx, Y: ly}
 	}
 	mods := uiMods(sdl.GetModState())
