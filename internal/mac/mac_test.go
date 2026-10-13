@@ -151,3 +151,11 @@ func TestConstantsListed(t *testing.T) {
 		}
 	}
 }
+
+// TestOnSleepRegisters: the observers register without an exception (they
+// can't be fired from a test).
+func TestOnSleepRegisters(t *testing.T) {
+	if err := OnSleep(func(bool) {}); err != nil {
+		t.Fatal(err)
+	}
+}

@@ -68,17 +68,20 @@ var selectors = map[string][]string{
 	"+AVCaptureDevice":                 {"defaultDeviceWithMediaType:", "authorizationStatusForMediaType:", "requestAccessForMediaType:completionHandler:"},
 	"AVCaptureDevice":                  {"uniqueID", "localizedName", "transportType", "isConnected"},
 
-	"+NSArray":      {"array", "arrayWithObject:", "arrayWithObjects:count:"},
-	"NSArray":       {"count", "objectAtIndex:"},
-	"+NSString":     {"alloc"},
-	"NSString":      {"initWithUTF8String:", "UTF8String"},
-	"NSObject":      {"retain", "release", "autorelease"},
-	"NSError":       {"localizedDescription", "code", "domain"},
-	"NSDictionary":  {"objectForKey:"},
-	"+NSDictionary": {"dictionaryWithObjects:forKeys:count:"},
-	"NSNumber":      {"integerValue"},
-	"+NSNumber":     {"numberWithLongLong:", "numberWithDouble:", "numberWithBool:"},
-	"+NSURL":        {"fileURLWithPath:"},
+	"+NSArray":             {"array", "arrayWithObject:", "arrayWithObjects:count:"},
+	"NSArray":              {"count", "objectAtIndex:"},
+	"+NSString":            {"alloc"},
+	"NSString":             {"initWithUTF8String:", "UTF8String"},
+	"NSObject":             {"retain", "release", "autorelease"},
+	"NSError":              {"localizedDescription", "code", "domain"},
+	"NSDictionary":         {"objectForKey:"},
+	"+NSDictionary":        {"dictionaryWithObjects:forKeys:count:"},
+	"NSNumber":             {"integerValue"},
+	"+NSNumber":            {"numberWithLongLong:", "numberWithDouble:", "numberWithBool:"},
+	"+NSURL":               {"fileURLWithPath:"},
+	"+NSWorkspace":         {"sharedWorkspace"},
+	"NSWorkspace":          {"notificationCenter"},
+	"NSNotificationCenter": {"addObserverForName:object:queue:usingBlock:"},
 }
 
 // funcs are the C functions the package calls, by library.
@@ -136,7 +139,7 @@ func load() error {
 
 func loadOnce() error {
 	handles := map[string]uintptr{}
-	for _, path := range []string{foundationPath, coreFoundationPath, coreGraphicsPath, coreMediaPath, coreVideoPath, avfAudioPath, avFoundationPath, screenCaptureKitPath} {
+	for _, path := range []string{foundationPath, coreFoundationPath, coreGraphicsPath, coreMediaPath, coreVideoPath, avfAudioPath, avFoundationPath, appKitPath, screenCaptureKitPath} {
 		h, err := purego.Dlopen(path, purego.RTLD_NOW|purego.RTLD_GLOBAL)
 		if err != nil {
 			return fmt.Errorf("mac: %w", err)

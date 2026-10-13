@@ -15,6 +15,7 @@ import (
 	"log/slog"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unsafe"
 
@@ -51,6 +52,14 @@ type StreamConfig struct {
 	SystemAudio bool
 	// IncludeOwnAudio records reel's own sounds too (self-tests).
 	IncludeOwnAudio bool
+	// Name says which stream this is in logs ("video", "audio").
+	Name string
+
+	// OnActive, when set, hears ScreenCaptureKit say the stream has
+	// nothing to capture (false: the recorded window hid or closed) and has
+	// it again (true). macOS 15.2 and later; on its queue.
+	OnActive func(active bool)
+
 	// Mic is the microphone to record: an AVCaptureDevice uniqueID, or
 	// MicDefault, or "" for none.
 	Mic string
@@ -70,6 +79,11 @@ type Stream struct {
 	mu      sync.Mutex
 	stopped bool
 	onStop  func(error)
+	// inactive is set while ScreenCaptureKit says the stream has nothing
+	// to capture (macOS 15.2: the window it records closed or hid).
+	inactive atomic.Bool
+	onActive func(bool)
+	name     string
 }
 
 // streams finds the Stream an output object belongs to.
@@ -124,6 +138,8 @@ func loadOutput() error {
 		output.class, output.err = objc.RegisterClass("ReelStreamOutput", objc.GetClass("NSObject"), protos, nil, []objc.MethodDef{
 			{Cmd: sel("stream:didOutputSampleBuffer:ofType:"), Fn: didOutput},
 			{Cmd: sel("stream:didStopWithError:"), Fn: didStop},
+			{Cmd: sel("streamDidBecomeInactive:"), Fn: didBecomeInactive},
+			{Cmd: sel("streamDidBecomeActive:"), Fn: didBecomeActive},
 		})
 	})
 	return output.err
@@ -156,6 +172,39 @@ func didStop(self objc.ID, _ objc.SEL, _ objc.ID, nserr objc.ID) {
 	s.finish(err)
 }
 
+// didBecomeInactive is SCStreamDelegate's streamDidBecomeInactive: (macOS
+// 15.2): what the stream records is gone for now (a window closed).
+func didBecomeInactive(self objc.ID, _ objc.SEL, _ objc.ID) {
+	if s := streamOf(self); s != nil {
+		s.inactive.Store(true)
+		slog.Warn("mac: stream inactive: what it records is gone", "stream", s.name)
+		if s.onActive != nil {
+			s.onActive(false)
+		}
+	}
+}
+
+// didBecomeActive is streamDidBecomeActive: (macOS 15.2): it's back.
+func didBecomeActive(self objc.ID, _ objc.SEL, _ objc.ID) {
+	if s := streamOf(self); s != nil {
+		s.inactive.Store(false)
+		slog.Info("mac: stream active again", "stream", s.name)
+		if s.onActive != nil {
+			s.onActive(true)
+		}
+	}
+}
+
+func streamOf(output objc.ID) *Stream {
+	streams.Lock()
+	defer streams.Unlock()
+	return streams.m[output]
+}
+
+// Inactive reports whether ScreenCaptureKit says there's nothing to
+// capture right now (macOS 15.2 and later: the recorded window closed).
+func (s *Stream) Inactive() bool { return s.inactive.Load() }
+
 // StartStream starts recording. handler gets every sample on the stream's
 // queue; onStop (which may be nil) hears once when the stream ends, with
 // the error if it stopped by itself, or nil after Stop.
@@ -169,7 +218,7 @@ func StartStream(cfg StreamConfig, handler Handler, onStop func(error)) (*Stream
 	if !lib.preflight() {
 		return nil, ErrNoScreenAccess
 	}
-	s := &Stream{handler: handler, onStop: onStop}
+	s := &Stream{handler: handler, onStop: onStop, onActive: cfg.OnActive, name: cfg.Name}
 	var err error
 	withPool(func() { err = s.start(cfg) })
 	if err != nil {
@@ -404,4 +453,11 @@ func protocol(name, method, types string) *objc.Protocol {
 	p.AddMethodDescription(sel(method), types, false, true)
 	p.Register()
 	return p
+}
+
+// Ended reports whether the stream has ended (by Stop or by itself).
+func (s *Stream) Ended() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.stopped
 }
