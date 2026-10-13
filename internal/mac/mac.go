@@ -76,18 +76,26 @@ var selectors = map[string][]string{
 	"NSError":              {"localizedDescription", "code", "domain"},
 	"NSDictionary":         {"objectForKey:"},
 	"+NSDictionary":        {"dictionaryWithObjects:forKeys:count:"},
-	"NSNumber":             {"integerValue"},
+	"NSNumber":             {"integerValue", "unsignedIntValue", "boolValue"},
 	"+NSNumber":            {"numberWithLongLong:", "numberWithDouble:", "numberWithBool:"},
 	"+NSURL":               {"fileURLWithPath:"},
 	"+NSWorkspace":         {"sharedWorkspace"},
 	"NSWorkspace":          {"notificationCenter"},
 	"NSNotificationCenter": {"addObserverForName:object:queue:usingBlock:"},
+	"+NSPasteboard":        {"generalPasteboard"},
+	"NSPasteboard":         {"clearContents", "writeObjects:"},
+	"+NSFileManager":       {"defaultManager"},
+	"NSFileManager":        {"trashItemAtURL:resultingItemURL:error:"},
+	"+SCScreenshotManager": {"captureImageWithFilter:configuration:completionHandler:"},
+	"+NSScreen":            {"screens"},
+	"NSScreen":             {"deviceDescription", "localizedName"},
 }
 
 // funcs are the C functions the package calls, by library.
 var funcs = map[string][]string{
-	coreGraphicsPath:   {"CGPreflightScreenCaptureAccess", "CGRequestScreenCaptureAccess"},
-	coreFoundationPath: {"CFRelease", "CFRetain"},
+	coreGraphicsPath: {"CGPreflightScreenCaptureAccess", "CGRequestScreenCaptureAccess", "CGWindowListCopyWindowInfo", "CGImageGetWidth", "CGImageGetHeight",
+		"CGImageGetBytesPerRow", "CGImageGetBitsPerPixel", "CGImageGetBitmapInfo", "CGImageGetDataProvider", "CGDataProviderCopyData"},
+	coreFoundationPath: {"CFRelease", "CFRetain", "CFDataGetBytePtr", "CFDataGetLength"},
 	coreMediaPath: {"CMSampleBufferGetPresentationTimeStamp", "CMSampleBufferGetDuration", "CMSampleBufferGetNumSamples",
 		"CMSampleBufferDataIsReady", "CMSampleBufferGetImageBuffer", "CMSampleBufferGetSampleAttachmentsArray",
 		"CMSampleBufferGetFormatDescription", "CMAudioFormatDescriptionGetStreamBasicDescription",
@@ -107,7 +115,7 @@ var constants = map[string][]string{
 		"AVVideoProfileLevelKey", "AVVideoProfileLevelH264HighAutoLevel", "AVVideoExpectedSourceFrameRateKey",
 		"AVVideoColorPropertiesKey", "AVVideoColorPrimariesKey", "AVVideoColorPrimaries_ITU_R_709_2",
 		"AVVideoTransferFunctionKey", "AVVideoTransferFunction_ITU_R_709_2", "AVVideoYCbCrMatrixKey", "AVVideoYCbCrMatrix_ITU_R_709_2"},
-	coreGraphicsPath:     {"kCGColorSpaceSRGB", "kCGDisplayStreamYCbCrMatrix_ITU_R_709_2"},
+	coreGraphicsPath:     {"kCGColorSpaceSRGB", "kCGDisplayStreamYCbCrMatrix_ITU_R_709_2", "kCGWindowNumber", "kCGWindowIsOnscreen"},
 	avfAudioPath:         {"AVFormatIDKey", "AVSampleRateKey", "AVNumberOfChannelsKey", "AVEncoderBitRateKey"},
 	screenCaptureKitPath: {"SCStreamFrameInfoStatus"},
 }
@@ -173,6 +181,12 @@ func loadOnce() error {
 		return fmt.Errorf("mac: %w", err)
 	}
 	if err := loadAudioWriter(); err != nil {
+		return fmt.Errorf("mac: %w", err)
+	}
+	if err := loadWindows(); err != nil {
+		return fmt.Errorf("mac: %w", err)
+	}
+	if err := loadScreenshot(); err != nil {
 		return fmt.Errorf("mac: %w", err)
 	}
 	lib.consts = map[string]objc.ID{}
