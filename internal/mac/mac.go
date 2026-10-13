@@ -52,21 +52,31 @@ var selectors = map[string][]string{
 		"startCaptureWithCompletionHandler:", "stopCaptureWithCompletionHandler:", "synchronizationClock"},
 	"SCStreamConfiguration": {"init", "setWidth:", "setHeight:", "setMinimumFrameInterval:", "setPixelFormat:", "setQueueDepth:",
 		"setShowsCursor:", "setSourceRect:", "setCapturesAudio:", "setSampleRate:", "setChannelCount:",
-		"setExcludesCurrentProcessAudio:", "setCaptureMicrophone:", "setMicrophoneCaptureDeviceID:"},
+		"setExcludesCurrentProcessAudio:", "setCaptureMicrophone:", "setMicrophoneCaptureDeviceID:",
+		"setColorSpaceName:", "setColorMatrix:"},
+
+	"AVAssetWriter": {"initWithURL:fileType:error:", "setShouldOptimizeForNetworkUse:", "setMovieFragmentInterval:",
+		"canApplyOutputSettings:forMediaType:", "canAddInput:", "addInput:", "startWriting", "startSessionAtSourceTime:",
+		"endSessionAtSourceTime:", "finishWritingWithCompletionHandler:", "cancelWriting", "status", "error"},
+	"AVAssetWriterInput": {"initWithMediaType:outputSettings:", "setExpectsMediaDataInRealTime:", "isReadyForMoreMediaData",
+		"appendSampleBuffer:", "markAsFinished"},
 
 	"+AVCaptureDeviceDiscoverySession": {"discoverySessionWithDeviceTypes:mediaType:position:"},
 	"AVCaptureDeviceDiscoverySession":  {"devices"},
 	"+AVCaptureDevice":                 {"defaultDeviceWithMediaType:", "authorizationStatusForMediaType:", "requestAccessForMediaType:completionHandler:"},
 	"AVCaptureDevice":                  {"uniqueID", "localizedName", "transportType", "isConnected"},
 
-	"+NSArray":     {"array", "arrayWithObject:", "arrayWithObjects:count:"},
-	"NSArray":      {"count", "objectAtIndex:"},
-	"+NSString":    {"alloc"},
-	"NSString":     {"initWithUTF8String:", "UTF8String"},
-	"NSObject":     {"retain", "release", "autorelease"},
-	"NSError":      {"localizedDescription", "code", "domain"},
-	"NSDictionary": {"objectForKey:"},
-	"NSNumber":     {"integerValue"},
+	"+NSArray":      {"array", "arrayWithObject:", "arrayWithObjects:count:"},
+	"NSArray":       {"count", "objectAtIndex:"},
+	"+NSString":     {"alloc"},
+	"NSString":      {"initWithUTF8String:", "UTF8String"},
+	"NSObject":      {"retain", "release", "autorelease"},
+	"NSError":       {"localizedDescription", "code", "domain"},
+	"NSDictionary":  {"objectForKey:"},
+	"+NSDictionary": {"dictionaryWithObjects:forKeys:count:"},
+	"NSNumber":      {"integerValue"},
+	"+NSNumber":     {"numberWithLongLong:", "numberWithDouble:", "numberWithBool:"},
+	"+NSURL":        {"fileURLWithPath:"},
 }
 
 // funcs are the C functions the package calls, by library.
@@ -76,7 +86,8 @@ var funcs = map[string][]string{
 	coreMediaPath: {"CMSampleBufferGetPresentationTimeStamp", "CMSampleBufferGetDuration", "CMSampleBufferGetNumSamples",
 		"CMSampleBufferDataIsReady", "CMSampleBufferGetImageBuffer", "CMSampleBufferGetSampleAttachmentsArray",
 		"CMSampleBufferGetFormatDescription", "CMAudioFormatDescriptionGetStreamBasicDescription",
-		"CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer", "CMClockGetHostTimeClock", "CMClockGetTime"},
+		"CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer", "CMClockGetHostTimeClock", "CMClockGetTime",
+		"CMSampleBufferCreateCopyWithNewTiming"},
 	coreVideoPath: {"CVPixelBufferGetWidth", "CVPixelBufferGetHeight", "CVPixelBufferGetPixelFormatType"},
 }
 
@@ -84,7 +95,13 @@ var funcs = map[string][]string{
 // package reads, by library. Their values are never hard-coded: a constant
 // that changed under us would raise an exception later, far from here.
 var constants = map[string][]string{
-	avFoundationPath:     {"AVMediaTypeAudio", "AVCaptureDeviceTypeMicrophone"},
+	avFoundationPath: {"AVMediaTypeAudio", "AVMediaTypeVideo", "AVCaptureDeviceTypeMicrophone", "AVFileTypeMPEG4",
+		"AVVideoCodecKey", "AVVideoCodecTypeH264", "AVVideoWidthKey", "AVVideoHeightKey", "AVVideoCompressionPropertiesKey",
+		"AVVideoAverageBitRateKey", "AVVideoMaxKeyFrameIntervalDurationKey", "AVVideoAllowFrameReorderingKey",
+		"AVVideoProfileLevelKey", "AVVideoProfileLevelH264HighAutoLevel", "AVVideoExpectedSourceFrameRateKey",
+		"AVVideoColorPropertiesKey", "AVVideoColorPrimariesKey", "AVVideoColorPrimaries_ITU_R_709_2",
+		"AVVideoTransferFunctionKey", "AVVideoTransferFunction_ITU_R_709_2", "AVVideoYCbCrMatrixKey", "AVVideoYCbCrMatrix_ITU_R_709_2"},
+	coreGraphicsPath:     {"kCGColorSpaceSRGB", "kCGDisplayStreamYCbCrMatrix_ITU_R_709_2"},
 	screenCaptureKitPath: {"SCStreamFrameInfoStatus"},
 }
 
@@ -143,6 +160,9 @@ func loadOnce() error {
 	}
 
 	if err := loadCoreMedia(); err != nil {
+		return fmt.Errorf("mac: %w", err)
+	}
+	if err := loadWriter(); err != nil {
 		return fmt.Errorf("mac: %w", err)
 	}
 	lib.consts = map[string]objc.ID{}

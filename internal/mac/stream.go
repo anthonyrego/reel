@@ -350,7 +350,12 @@ func streamConfiguration(cfg StreamConfig) (objc.ID, error) {
 	c.Send(sel("setHeight:"), uint(cfg.Height))
 	c.Send(sel("setMinimumFrameInterval:"), TimeOf(1, int32(fps)))
 	c.Send(sel("setPixelFormat:"), uint32(format[0])<<24|uint32(format[1])<<16|uint32(format[2])<<8|uint32(format[3]))
-	c.Send(sel("setQueueDepth:"), 6)
+	// The most ScreenCaptureKit allows: the writer keeps the last frame
+	// and the encoder holds a few while it works.
+	c.Send(sel("setQueueDepth:"), 8)
+	// sRGB through the BT.709 matrix, as the writer tags the file.
+	c.Send(sel("setColorSpaceName:"), constant("kCGColorSpaceSRGB"))
+	c.Send(sel("setColorMatrix:"), constant("kCGDisplayStreamYCbCrMatrix_ITU_R_709_2"))
 	c.Send(sel("setShowsCursor:"), cfg.ShowsCursor)
 	if r := cfg.SourceRect; r.W > 0 && r.H > 0 {
 		c.Send(sel("setSourceRect:"), cgRect{r.X, r.Y, r.W, r.H})

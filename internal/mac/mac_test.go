@@ -103,3 +103,20 @@ func TestTransport(t *testing.T) {
 		t.Error("Bluetooth()")
 	}
 }
+
+func TestCMTimeNanos(t *testing.T) {
+	for _, c := range []struct {
+		t    CMTime
+		want int64
+	}{
+		{Nanos(123_456_789_012), 123_456_789_012},
+		{TimeOf(3, 2), 1_500_000_000},
+		{TimeOf(1, 3), 333_333_333},
+		{TimeOf(1_000_000_000_000, 48000), 20_833_333_333_333_333},
+		{CMTime{}, 0},
+	} {
+		if got := c.t.Nanos(); got != c.want {
+			t.Errorf("%+v = %d, want %d", c.t, got, c.want)
+		}
+	}
+}

@@ -76,3 +76,23 @@ func WindowState(w *sdl.Window) string {
 		objc.Send[bool](nw, objc.RegisterName("isOnActiveSpace")), objc.Send[int](nw, objc.RegisterName("level")),
 		objc.Send[bool](nw, objc.RegisterName("isKeyWindow")))
 }
+
+// nsSize is AppKit's NSSize.
+type nsSize struct{ W, H float64 }
+
+// nsRect is AppKit's NSRect.
+type nsRect struct {
+	X, Y float64
+	Size nsSize
+}
+
+// WindowFrameSize is the window's whole size in points, title bar
+// included: what ScreenCaptureKit records of it. Main thread.
+func WindowFrameSize(w *sdl.Window) (float64, float64, error) {
+	nw, err := nsWindow(w)
+	if err != nil {
+		return 0, 0, err
+	}
+	f := objc.Send[nsRect](nw, objc.RegisterName("frame"))
+	return f.Size.W, f.Size.H, nil
+}

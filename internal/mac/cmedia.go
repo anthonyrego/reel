@@ -326,3 +326,30 @@ func (s Sample) PCM(fn func(format ASBD, bufs [][]byte)) error {
 // ptr turns an address CoreMedia gave us into a pointer. As in deref,
 // going through &p keeps vet's check satisfied.
 func ptr(p uintptr) unsafe.Pointer { return *(*unsafe.Pointer)(unsafe.Pointer(&p)) }
+
+// Nanos is t in nanoseconds (0 when it isn't valid). Host times are
+// nanoseconds since boot, so this is exact for them; other timescales
+// round toward zero without overflowing.
+func (t CMTime) Nanos() int64 {
+	if !t.Valid() {
+		return 0
+	}
+	if t.Timescale == 1_000_000_000 {
+		return t.Value
+	}
+	s := int64(t.Timescale)
+	return t.Value/s*1_000_000_000 + t.Value%s*1_000_000_000/s
+}
+
+// Nanos is a valid CMTime of ns nanoseconds.
+func Nanos(ns int64) CMTime { return TimeOf(ns, 1_000_000_000) }
+
+// Retain retains a CoreFoundation object (a CMSampleBufferRef) and returns
+// it.
+func Retain(ref uintptr) uintptr { return lib.cfRetain(ref) }
+
+// Release releases a CoreFoundation object.
+func Release(ref uintptr) { lib.cfRelease(ref) }
+
+// WithPool runs fn on a locked OS thread inside an autorelease pool.
+func WithPool(fn func()) { withPool(fn) }
