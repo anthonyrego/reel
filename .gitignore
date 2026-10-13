@@ -1,0 +1,5 @@
+/build/
+/dist/
+/.dev/
+.DS_Store
+/reel
