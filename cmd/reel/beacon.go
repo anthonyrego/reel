@@ -17,6 +17,7 @@ import (
 	"github.com/Zyko0/go-sdl3/sdl"
 
 	"github.com/anthonyrego/reel/internal/draw"
+	"github.com/anthonyrego/reel/internal/mac"
 	"github.com/anthonyrego/reel/internal/text"
 	"github.com/anthonyrego/reel/internal/ui"
 )
@@ -35,13 +36,13 @@ type beacon struct {
 	period    time.Duration
 	clicksFor time.Duration
 
-	start time.Time
+	start     time.Time
+	startHost int64 // start on the host clock (ns), for fake sources
 	// after, when set, runs once on the main thread a second in (logs).
-	after   func()
-	audio   *sdl.AudioStream
-	closed  bool
-	tc      textCache
-	flashes int
+	after  func()
+	audio  *sdl.AudioStream
+	closed bool
+	tc     textCache
 }
 
 func newBeacon(period, clicksFor time.Duration) *beacon {
@@ -52,7 +53,7 @@ func newBeacon(period, clicksFor time.Duration) *beacon {
 // thread, with SDL's audio initialized.
 func (b *beacon) begin() error {
 	if b.clicksFor <= 0 { // flashes only: the speakers stay closed
-		b.start, b.closed = time.Now(), true
+		b.start, b.startHost, b.closed = time.Now(), mac.HostTime().Nanos(), true
 		slog.Info("beacon: started", "period", b.period, "clicks", false)
 		return nil
 	}
@@ -70,7 +71,7 @@ func (b *beacon) begin() error {
 		s.Destroy()
 		return fmt.Errorf("beacon: start the speakers: %w", err)
 	}
-	b.audio, b.start = s, time.Now()
+	b.audio, b.start, b.startHost = s, time.Now(), mac.HostTime().Nanos()
 	slog.Info("beacon: started", "period", b.period, "clicksFor", b.clicksFor)
 	return nil
 }

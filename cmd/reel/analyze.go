@@ -45,6 +45,12 @@ type expect struct {
 	frameDur  float64 // one frame, the duration tolerance
 	period    float64 // the beacon's flash period (0: don't count)
 	videoOnly bool
+	// refresh is the display's refresh interval: a flash's onset in the
+	// video wobbles by up to that much.
+	refresh float64
+	// micAfter is where a fake mic's clicks fall after each flash (0:
+	// no fake mic).
+	micAfter float64
 }
 
 // checks prints PASS/FAIL lines and remembers whether any failed.
@@ -134,6 +140,159 @@ func analyzeFile(c *checks, path string, want expect) {
 		c.check(math.Abs(g.Median-want.period) <= tol, "flash spacing",
 			"median %.3f s, %.3f…%.3f (period %.3f)", g.Median, g.Min, g.Max, want.period)
 	}
+	if !want.videoOnly {
+		analyzeAudio(c, path, f, onsets, want)
+	}
+}
+
+// Audio sync limits.
+const (
+	// maxSyncOffset is how far the picture may trail a sound made with it:
+	// a frame and a half at 30 fps.
+	maxSyncOffset = 0.045
+	// maxSyncDrift is how far the offset may move from the first third of
+	// the recording to the last.
+	maxSyncDrift = 0.010
+	// maxMicDrift is how far the fake mic may move against the system
+	// clicks over the recording: both are audio, sample-exact, so only
+	// placement errors (and the speakers' own clock) move it.
+	maxMicDrift = 0.003
+)
+
+// analyzeAudio checks the audio track: its format and length, and, from
+// the decoded mix, that every flash's click is there and that a fake
+// mic's clicks land where their PTS put them, beside their flashes and
+// against the system clicks, from the start to the end.
+func analyzeAudio(c *checks, path string, f mp4.File, flashes []float64, want expect) {
+	a, ok := f.Track("soun")
+	c.check(ok, "audio track", "%d tracks", len(f.Tracks))
+	if !ok {
+		return
+	}
+	if v, ok := f.Track("vide"); ok {
+		c.check(math.Abs(a.Duration-v.Duration) <= 0.05, "audio duration",
+			"%.3f s (video %.3f s)", a.Duration, v.Duration)
+	}
+	s, err := probeAudio(path)
+	if err != nil {
+		c.check(false, "ffprobe audio", "%v", err)
+		return
+	}
+	c.check(s.Codec == "aac" && s.Rate == "48000" && s.Channels == 2, "audio format",
+		"%s %s Hz, %d channels", s.Codec, s.Rate, s.Channels)
+	pcm, err := pcmMono(path, 48000)
+	if err != nil {
+		c.check(false, "decode audio", "%v", err)
+		return
+	}
+	clicks := avsync.AudioOnsets(pcm, 48000, 0.02, 0.1)
+	// A click near a flash is the beacon's (system audio); the rest are
+	// the fake mic's.
+	var system, mic []float64
+	for _, at := range clicks {
+		near := false
+		for _, v := range flashes {
+			if math.Abs(at-v) <= want.period/4 {
+				near = true
+				break
+			}
+		}
+		if near {
+			system = append(system, at)
+		} else {
+			mic = append(mic, at)
+		}
+	}
+	// The beacon's own clicks: heard, and how late its speakers play them
+	// (a property of the test, not of the recording: noted, not judged).
+	sys := avsync.Summarize(avsync.Pair(flashes, system, want.period/4))
+	c.note("clicks", "%d heard: %d with a flash, %d between", len(clicks), len(system), len(mic))
+	c.check(sys.N >= len(flashes)-2, "every flash heard", "%d of %d flashes have a click", sys.N, len(flashes))
+	if sys.N > 0 {
+		c.note("speaker latency", "the beacon's clicks come %+.0f ms after its flashes (p5 %+.0f, p95 %+.0f)",
+			1000*sys.Median, 1000*sys.P5, 1000*sys.P95)
+	}
+	if want.micAfter <= 0 {
+		return
+	}
+
+	// The fake mic is stamped with the exact host time each click "was
+	// captured", micAfter past a flash's due time, so it measures the
+	// recording itself: a click against its flash (audio PTS vs video
+	// PTS), and against the system click before it (two audio sources).
+	shifted := make([]float64, len(flashes))
+	for i, v := range flashes {
+		shifted[i] = v + want.micAfter
+	}
+	av := avsync.Pair(shifted, mic, want.period/4)
+	o := avsync.Summarize(av)
+	c.check(o.N >= len(flashes)-3, "fake mic heard", "%d of %d", o.N, len(flashes))
+	if o.N == 0 {
+		return
+	}
+	// A screen shows a frame a refresh or more after it's drawn, and the
+	// video's PTS is when it's shown, so the picture trails the click by
+	// that much (the same is true of a real mic and a real screen).
+	c.check(o.Median >= -maxSyncOffset && o.Median <= 0.010, "A/V sync",
+		"mic click − flash %+.1f ms from where they were made together (p5 %+.1f, p95 %+.1f)",
+		1000*o.Median, 1000*o.P5, 1000*o.P95)
+	// A flash's onset is only seen at a captured frame: every 1/fps, or
+	// every refresh when the display is slower.
+	grain := math.Max(want.refresh, want.frameDur)
+	c.check(o.P95-o.P5 <= grain+0.008, "A/V spread",
+		"%.1f ms (frames come every %.1f ms)", 1000*(o.P95-o.P5), 1000*grain)
+	if d, ok := thirds(av); ok {
+		c.check(math.Abs(d) <= maxSyncDrift, "A/V drift", "%+.1f ms from the first third to the last", 1000*d)
+	}
+	// Each mic click against the system click before it: both audio,
+	// sample-exact, so only placement moves it.
+	var gaps []float64
+	for _, m := range mic {
+		prev := math.Inf(-1)
+		for _, s := range system {
+			if s <= m && s > prev {
+				prev = s
+			}
+		}
+		if !math.IsInf(prev, -1) {
+			gaps = append(gaps, m-prev)
+		}
+	}
+	if d, ok := thirds(gaps); ok {
+		c.check(math.Abs(d) <= maxMicDrift, "mic drift", "%+.2f ms against the system clicks, first third to last", 1000*d)
+	}
+}
+
+// thirds is the median of the last third of xs minus that of the first.
+func thirds(xs []float64) (float64, bool) {
+	n := len(xs) / 3
+	if n < 3 {
+		return 0, false
+	}
+	return avsync.Summarize(xs[len(xs)-n:]).Median - avsync.Summarize(xs[:n]).Median, true
+}
+
+// audioStream is what ffprobe says about the audio.
+type audioStream struct {
+	Codec    string `json:"codec_name"`
+	Rate     string `json:"sample_rate"`
+	Channels int    `json:"channels"`
+}
+
+func probeAudio(path string) (audioStream, error) {
+	out, err := exec.Command("ffprobe", "-v", "error", "-select_streams", "a:0",
+		"-show_entries", "stream=codec_name,sample_rate,channels", "-of", "json", path).Output()
+	if err != nil {
+		return audioStream{}, fmt.Errorf("ffprobe: %w", err)
+	}
+	var r struct{ Streams []audioStream }
+	if err := json.Unmarshal(out, &r); err != nil {
+		return audioStream{}, err
+	}
+	if len(r.Streams) == 0 {
+		return audioStream{}, errors.New("ffprobe: no audio stream")
+	}
+	return r.Streams[0], nil
 }
 
 func minV(ps []avsync.Point) float64 {
