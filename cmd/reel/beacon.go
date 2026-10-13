@@ -51,6 +51,11 @@ func newBeacon(period, clicksFor time.Duration) *beacon {
 // begin opens the speakers, queues every click and starts the clock. Main
 // thread, with SDL's audio initialized.
 func (b *beacon) begin() error {
+	if b.clicksFor <= 0 { // flashes only: the speakers stay closed
+		b.start, b.closed = time.Now(), true
+		slog.Info("beacon: started", "period", b.period, "clicks", false)
+		return nil
+	}
 	spec := &sdl.AudioSpec{Format: sdl.AUDIO_F32LE, Channels: 1, Freq: beaconRate}
 	s := sdl.AUDIO_DEVICE_DEFAULT_PLAYBACK.OpenAudioDeviceStream(spec, 0)
 	if s == nil {

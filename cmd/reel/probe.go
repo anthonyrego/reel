@@ -158,9 +158,12 @@ func probeSelf(cfg mac.StreamConfig, dur, clicksFor time.Duration) error {
 	}
 	slog.Info("probe: window", "id", id, "state", platform.WindowState(a.window.Handle()))
 	b.after = func() { slog.Info("probe: window after 1s", "state", platform.WindowState(a.window.Handle())) }
-	pw, ph := a.window.PixelSize()
+	ww, wh, err := platform.WindowFrameSize(a.window.Handle())
+	if err != nil {
+		return err
+	}
 	cfg.Target = mac.Target{WindowID: id}
-	cfg.Width, cfg.Height = pw&^1, ph&^1
+	cfg.Width, cfg.Height = area.Pixels(ww, wh, float64(a.window.Scale()), area.MaxW, area.MaxH)
 	if err := b.begin(); err != nil {
 		return err
 	}
