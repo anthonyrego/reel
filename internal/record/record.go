@@ -77,6 +77,10 @@ type Result struct {
 	// AudioFrames were written; AudioLost were captured but lost: queued
 	// too long, or arrived after their place was written.
 	AudioFrames, AudioLost int64
+	// Pauses are where in the recording each pause was cut out, and
+	// PausedFor how long they lasted in all.
+	Pauses    []time.Duration
+	PausedFor time.Duration
 	// StoppedBy is why the stream ended by itself (nil after Stop).
 	StoppedBy error
 }
@@ -158,6 +162,12 @@ type Recorder struct {
 	result   Result
 	err      error
 	stopped  atomic.Pointer[error] // a stream ended by itself
+	// A pause the user made, and one reel made while the recorded window
+	// was gone: the recording runs only while neither holds, and the
+	// window coming back never undoes the user's pause.
+	pauseMu            sync.Mutex
+	userPaused, hidden bool
+
 	// stopAt is the host time Stop was called (0 before): nothing captured
 	// after it is written, though capture runs on a moment for the audio.
 	stopAt atomic.Int64
@@ -199,6 +209,10 @@ func Start(cfg Config) (*Recorder, error) {
 	go r.run()
 
 	video, sound := r.streams()
+	video.OnActive, video.Name = r.activity, "video"
+	if sound != nil {
+		sound.Name = "audio"
+	}
 	cancel := func(err error) (*Recorder, error) {
 		if r.video != nil {
 			r.video.Stop()
@@ -335,10 +349,58 @@ func (r *Recorder) streamStopped(err error) {
 }
 
 // Pause leaves out what's captured from now until Resume.
-func (r *Recorder) Pause() { r.send(ctlPause) }
+func (r *Recorder) Pause() {
+	r.pauseMu.Lock()
+	running := !r.userPaused && !r.hidden
+	r.userPaused = true
+	r.pauseMu.Unlock()
+	if running {
+		r.send(ctlPause)
+	}
+}
 
-// Resume records again.
-func (r *Recorder) Resume() { r.send(ctlResume) }
+// Resume records again (unless the recorded window is still gone: then
+// as soon as it's back).
+func (r *Recorder) Resume() {
+	r.pauseMu.Lock()
+	resume := r.userPaused && !r.hidden
+	r.userPaused = false
+	r.pauseMu.Unlock()
+	if resume {
+		r.send(ctlResume)
+	}
+}
+
+// Paused reports whether the recording is paused, and whether it's
+// because the recorded window is gone.
+func (r *Recorder) Paused() (paused, hidden bool) {
+	r.pauseMu.Lock()
+	defer r.pauseMu.Unlock()
+	return r.userPaused || r.hidden, r.hidden
+}
+
+// activity hears the video stream lose what it records (a window hid,
+// minimized or closed) and get it back: the recording pauses meanwhile,
+// so it holds no stretch of a frozen picture. On ScreenCaptureKit's queue.
+func (r *Recorder) activity(active bool) {
+	r.pauseMu.Lock()
+	if r.hidden == !active {
+		r.pauseMu.Unlock()
+		return
+	}
+	r.hidden = !active
+	user := r.userPaused
+	r.pauseMu.Unlock()
+	slog.Info("record: the recorded content", "active", active, "userPaused", user)
+	if user {
+		return
+	}
+	if active {
+		r.send(ctlResume)
+	} else {
+		r.send(ctlPause)
+	}
+}
 
 func (r *Recorder) send(k ctlKind) {
 	done := make(chan struct{})
@@ -361,8 +423,10 @@ func (r *Recorder) Stop() (Result, error) {
 		if r.cfg.audio() && r.stopped.Load() == nil {
 			time.Sleep(stopTail)
 		}
+		// Both streams, even when one ended by itself: the other is still
+		// capturing.
 		for _, s := range []*mac.Stream{r.video, r.sound} {
-			if s != nil {
+			if s != nil && !s.Ended() {
 				if err := s.Stop(); err != nil {
 					slog.Warn("record: stop a stream", "err", err)
 				}
@@ -429,6 +493,7 @@ type writing struct {
 	pending      []float32
 	pendingStart int64 // its first frame
 	audioLost    int64
+	pauses       []time.Duration
 }
 
 // frame writes one frame at its place in the recording.
@@ -531,7 +596,11 @@ func (w *writing) drain() {
 // resume ends the pause and writes the newest picture again where the
 // recording picks up.
 func (w *writing) resume(at int64) {
+	if !w.tl.Paused() {
+		return
+	}
 	w.tl.Resume(at)
+	w.pauses = append(w.pauses, time.Duration(w.tl.At(at)))
 	// A buffer that straddled the pause's start ran a few ms past it: the
 	// sources pick up exactly where their PTS put them.
 	w.mix.Reanchor()
@@ -635,6 +704,8 @@ func (w *writing) stop(at int64) {
 	res.Dropped = r.writer.Dropped + int(r.queueDrops.Load())
 	res.Duration = time.Duration(end)
 	res.AudioFrames = r.writer.AudioFrames
+	res.Pauses = w.pauses
+	res.PausedFor = time.Duration(w.tl.PausedFor(at))
 	res.AudioLost = w.audioLost + r.audioDrops.Load() + w.mix.Late[mixer.System] + w.mix.Late[mixer.Mic]
 	r.result = res
 	slog.Info("record: finished", "path", res.Path, "duration", res.Duration, "frames", res.Frames,
@@ -654,3 +725,8 @@ func (r *Recorder) Feed(src mixer.Source, pts int64, rate float64, pcm [][]float
 		r.audioDrops.Add(int64(len(pcm[0])))
 	}
 }
+
+// Interrupt ends the recording as if a stream had stopped by itself with
+// err: self-tests of that path, which ScreenCaptureKit can't be made to
+// take on demand.
+func (r *Recorder) Interrupt(err error) { r.streamStopped(err) }
