@@ -47,36 +47,50 @@ var selectors = map[string][]string{
 	"SCDisplay":            {"displayID", "width", "height", "frame"},
 	"SCWindow":             {"windowID", "frame", "title", "windowLayer", "owningApplication", "isOnScreen"},
 	"SCRunningApplication": {"bundleIdentifier", "applicationName", "processID"},
-	"SCContentFilter":      {"initWithDisplay:excludingApplications:exceptingWindows:", "pointPixelScale"},
+	"SCContentFilter":      {"initWithDisplay:excludingApplications:exceptingWindows:", "pointPixelScale", "initWithDesktopIndependentWindow:"},
+	"SCStream": {"initWithFilter:configuration:delegate:", "addStreamOutput:type:sampleHandlerQueue:error:",
+		"startCaptureWithCompletionHandler:", "stopCaptureWithCompletionHandler:", "synchronizationClock"},
+	"SCStreamConfiguration": {"init", "setWidth:", "setHeight:", "setMinimumFrameInterval:", "setPixelFormat:", "setQueueDepth:",
+		"setShowsCursor:", "setSourceRect:", "setCapturesAudio:", "setSampleRate:", "setChannelCount:",
+		"setExcludesCurrentProcessAudio:", "setCaptureMicrophone:", "setMicrophoneCaptureDeviceID:"},
 
 	"+AVCaptureDeviceDiscoverySession": {"discoverySessionWithDeviceTypes:mediaType:position:"},
 	"AVCaptureDeviceDiscoverySession":  {"devices"},
 	"+AVCaptureDevice":                 {"defaultDeviceWithMediaType:", "authorizationStatusForMediaType:", "requestAccessForMediaType:completionHandler:"},
 	"AVCaptureDevice":                  {"uniqueID", "localizedName", "transportType", "isConnected"},
 
-	"+NSArray":  {"array", "arrayWithObject:", "arrayWithObjects:count:"},
-	"NSArray":   {"count", "objectAtIndex:"},
-	"+NSString": {"alloc"},
-	"NSString":  {"initWithUTF8String:", "UTF8String"},
-	"NSObject":  {"retain", "release", "autorelease"},
-	"NSError":   {"localizedDescription", "code", "domain"},
+	"+NSArray":     {"array", "arrayWithObject:", "arrayWithObjects:count:"},
+	"NSArray":      {"count", "objectAtIndex:"},
+	"+NSString":    {"alloc"},
+	"NSString":     {"initWithUTF8String:", "UTF8String"},
+	"NSObject":     {"retain", "release", "autorelease"},
+	"NSError":      {"localizedDescription", "code", "domain"},
+	"NSDictionary": {"objectForKey:"},
+	"NSNumber":     {"integerValue"},
 }
 
 // funcs are the C functions the package calls, by library.
 var funcs = map[string][]string{
 	coreGraphicsPath:   {"CGPreflightScreenCaptureAccess", "CGRequestScreenCaptureAccess"},
 	coreFoundationPath: {"CFRelease", "CFRetain"},
+	coreMediaPath: {"CMSampleBufferGetPresentationTimeStamp", "CMSampleBufferGetDuration", "CMSampleBufferGetNumSamples",
+		"CMSampleBufferDataIsReady", "CMSampleBufferGetImageBuffer", "CMSampleBufferGetSampleAttachmentsArray",
+		"CMSampleBufferGetFormatDescription", "CMAudioFormatDescriptionGetStreamBasicDescription",
+		"CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer", "CMClockGetHostTimeClock", "CMClockGetTime"},
+	coreVideoPath: {"CVPixelBufferGetWidth", "CVPixelBufferGetHeight", "CVPixelBufferGetPixelFormatType"},
 }
 
 // constants are the framework constants (extern NSString *const) the
 // package reads, by library. Their values are never hard-coded: a constant
 // that changed under us would raise an exception later, far from here.
 var constants = map[string][]string{
-	avFoundationPath: {"AVMediaTypeAudio", "AVCaptureDeviceTypeMicrophone", "AVCaptureDeviceTypeExternal"},
+	avFoundationPath:     {"AVMediaTypeAudio", "AVCaptureDeviceTypeMicrophone"},
+	screenCaptureKitPath: {"SCStreamFrameInfoStatus"},
 }
 
-// protocols are the Objective-C protocols the package conforms to.
-var protocols = []string{}
+// protocols are the Objective-C protocols the stream output conforms to
+// (see protocol: reel registers them when no loaded binary has).
+var protocols = []string{"SCStreamOutput", "SCStreamDelegate"}
 
 type cgRect struct{ X, Y, W, H float64 }
 
@@ -101,7 +115,7 @@ func load() error {
 
 func loadOnce() error {
 	handles := map[string]uintptr{}
-	for _, path := range []string{foundationPath, coreFoundationPath, coreGraphicsPath, coreMediaPath, avFoundationPath, screenCaptureKitPath} {
+	for _, path := range []string{foundationPath, coreFoundationPath, coreGraphicsPath, coreMediaPath, coreVideoPath, avFoundationPath, screenCaptureKitPath} {
 		h, err := purego.Dlopen(path, purego.RTLD_NOW|purego.RTLD_GLOBAL)
 		if err != nil {
 			return fmt.Errorf("mac: %w", err)
@@ -128,6 +142,9 @@ func loadOnce() error {
 		purego.RegisterFunc(fn, p)
 	}
 
+	if err := loadCoreMedia(); err != nil {
+		return fmt.Errorf("mac: %w", err)
+	}
 	lib.consts = map[string]objc.ID{}
 	for path, names := range constants {
 		for _, name := range names {

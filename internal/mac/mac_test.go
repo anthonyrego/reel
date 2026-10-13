@@ -53,9 +53,18 @@ func TestBridge(t *testing.T) {
 			}
 		}
 	}
+	if err := loadOutput(); err != nil {
+		t.Fatalf("output class: %v", err)
+	}
 	for _, name := range protocols {
-		if objc.GetProtocol(name) == nil {
-			t.Errorf("no protocol %s", name)
+		p := objc.GetProtocol(name)
+		if p == nil || !objc.Send[bool](objc.ID(output.class), sel("conformsToProtocol:"), p) {
+			t.Errorf("the output class doesn't conform to %s", name)
+		}
+	}
+	for _, s := range []string{"stream:didOutputSampleBuffer:ofType:", "stream:didStopWithError:"} {
+		if !objc.Send[bool](objc.ID(output.class), sel("instancesRespondToSelector:"), sel(s)) {
+			t.Errorf("the output class doesn't respond to %s", s)
 		}
 	}
 }
