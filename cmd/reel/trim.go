@@ -74,16 +74,16 @@ func trimTo(src, dst string, from, to time.Duration) error {
 }
 
 // trimReplace trims the recording at src in place: the trimmed copy takes
-// its name and the original goes to the Trash. If the Trash won't take it,
-// both are kept, the trim as a copy, and the error says so. It returns
-// where the trim is.
-func trimReplace(src string, from, to time.Duration) (string, error) {
+// its name and the original goes to the Trash (trash: mac.Trash). If the
+// Trash won't take it, both are kept, the trim as a copy, and the error
+// says so. It returns where the trim is.
+func trimReplace(src string, from, to time.Duration, trash func(string) error) (string, error) {
 	tmp, err := trimHidden(src, filepath.Dir(src), from, to)
 	if err != nil {
 		return "", err
 	}
 	defer os.Remove(tmp)
-	if err := mac.Trash(src); err != nil {
+	if err := trash(src); err != nil {
 		dst := library.TrimmedPath(src)
 		if err2 := os.Link(tmp, dst); err2 != nil {
 			return "", err2

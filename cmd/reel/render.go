@@ -12,6 +12,9 @@ import (
 	"image"
 	"image/png"
 	"os"
+	"path/filepath"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/Zyko0/go-sdl3/sdl"
@@ -19,12 +22,15 @@ import (
 	"github.com/anthonyrego/reel/internal/config"
 	"github.com/anthonyrego/reel/internal/draw"
 	"github.com/anthonyrego/reel/internal/gfx"
+	"github.com/anthonyrego/reel/internal/mac"
+	"github.com/anthonyrego/reel/internal/mp4"
 	"github.com/anthonyrego/reel/internal/platform"
 	"github.com/anthonyrego/reel/internal/text"
 	"github.com/anthonyrego/reel/internal/theme"
 	"github.com/anthonyrego/reel/internal/ui"
 	"github.com/anthonyrego/reel/internal/ui/controls"
 	"github.com/anthonyrego/reel/internal/ui/home"
+	"github.com/anthonyrego/reel/internal/ui/trim"
 )
 
 func init() {
@@ -107,7 +113,8 @@ func runRender(args []string) error {
 	dark := fs.Bool("dark", false, "use the dark palette")
 	state := fs.String("state", "idle", "the main window's sample state: "+sampleNames())
 	hover := fs.String("hover", "", "move the pointer here first: X,Y in logical units")
-	sceneName := fs.String("scene", "home", "what to draw: home (the main window), hud (the floating controls, at -state live or paused) or area (the area picker over a made-up desktop)")
+	sceneName := fs.String("scene", "home", "what to draw: home (the main window), hud (the floating controls, at -state live or paused), area (the area picker over a made-up desktop) or trim (the trim screen, at -state "+strings.Join(trimStates, ", ")+")")
+	file := fs.String("file", "", "with -scene trim: show this recording's picture (default: a made-up one)")
 	live := fs.Bool("live", false, "draw this Mac's real state (permissions, displays, mics, recordings) through the controller, menus closed")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -116,8 +123,11 @@ func runRender(args []string) error {
 		return fmt.Errorf("-out is required")
 	}
 	sample, ok := samples[*state]
-	if !ok {
+	if !ok && *sceneName != "trim" {
 		return fmt.Errorf("-state %q: one of %s", *state, sampleNames())
+	}
+	if !ok {
+		sample = samples["idle"]
 	}
 	o, done, err := newOffscreen(false)
 	if err != nil {
@@ -164,8 +174,15 @@ func runRender(args []string) error {
 		c := &controller{v: v}
 		sc, w, h = &hud{c: c, hits: controls.NewHits()}, hudW, hudH
 		pal.Background = draw.RGB(0x6a7f9a) // a desktop to float over
+	case "trim":
+		ts, release, err := sampleTrim(o, *file, *state, int(w*float32(*scale)))
+		if err != nil {
+			return err
+		}
+		defer release()
+		sc = ts
 	case "area":
-		tex, err := sampleDesktop(o, int(w*float32(*scale)), int(h*float32(*scale)))
+		tex, err := sampleDesktop(o, areaImage, int(w*float32(*scale)), int(h*float32(*scale)))
 		if err != nil {
 			return err
 		}
@@ -177,7 +194,7 @@ func runRender(args []string) error {
 		sc = as
 	case "home":
 	default:
-		return fmt.Errorf("-scene %q: home, hud or area", *sceneName)
+		return fmt.Errorf("-scene %q: home, hud, area or trim", *sceneName)
 	}
 	img, err := o.image(sc, w, h, float32(*scale), pal)
 	if err != nil {
@@ -199,8 +216,9 @@ func writePNG(path string, img image.Image) error {
 }
 
 // sampleDesktop registers a made-up desktop (a gradient with a few
-// window-like cards) as the area picker's still.
-func sampleDesktop(o *offscreen, pw, ph int) (*sdl.GPUTexture, error) {
+// window-like cards) as image id: the area picker's still, a recording's
+// picture.
+func sampleDesktop(o *offscreen, id draw.ImageID, pw, ph int) (*sdl.GPUTexture, error) {
 	pix := make([]byte, pw*ph*4)
 	for y := range ph {
 		for x := range pw {
@@ -220,6 +238,71 @@ func sampleDesktop(o *offscreen, pw, ph int) (*sdl.GPUTexture, error) {
 	if err != nil {
 		return nil, err
 	}
-	o.renderer.SetImage(areaImage, tex)
+	o.renderer.SetImage(id, tex)
 	return tex, nil
+}
+
+// trimStates are the trim screen's sample states.
+var trimStates = []string{"idle", "uncut", "replace", "saving", "loading", "error"}
+
+// sampleTrim is the trim screen at a sample state, over a made-up picture
+// or, with file, that recording's.
+func sampleTrim(o *offscreen, file, state string, edge int) (scene, func(), error) {
+	if !slices.Contains(trimStates, state) {
+		return nil, nil, fmt.Errorf("-state %q: with -scene trim, one of %s", state, strings.Join(trimStates, ", "))
+	}
+	st := trim.State{Name: "Recording 2026-10-13 at 15.04.05", Duration: 47300 * time.Millisecond, Width: 1600, Height: 1000}
+	in, out := 4200*time.Millisecond, 31800*time.Millisecond
+	var img *image.RGBA
+	if file != "" {
+		f, err := mp4.ReadFile(file)
+		if err != nil {
+			return nil, nil, err
+		}
+		v, _ := f.Track("vide")
+		st.Name = strings.TrimSuffix(filepath.Base(file), filepath.Ext(file))
+		st.Duration, st.Width, st.Height = seconds(f.Duration), v.Width, v.Height
+		in, out = st.Duration/5, st.Duration*3/4
+		fr, err := mac.OpenFrames(file)
+		if err != nil {
+			return nil, nil, err
+		}
+		defer fr.Close()
+		if img, st.Shown, err = fr.At(in, edge); err != nil {
+			return nil, nil, err
+		}
+	}
+	v := trim.New(st)
+	// Actions that do nothing, so every control is drawn enabled.
+	v.Act = trim.Actions{Show: func(time.Duration) {}, Copy: func(_, _ time.Duration) {}, Replace: func(_, _ time.Duration) {}, Cancel: func() {}}
+	v.SetRange(in, out)
+	switch state {
+	case "uncut":
+		v.SetRange(0, st.Duration)
+		in = 0
+	case "replace":
+		v.AskReplace()
+	case "saving":
+		v.St.Busy = "Saving…"
+	case "error":
+		v.St.Error = "Couldn't save the trim: the disk is full"
+	}
+	release := func() {}
+	if state != "loading" {
+		var tex *sdl.GPUTexture
+		var err error
+		if img != nil {
+			tex, err = gfx.UploadTexture(o.device, sdl.GPU_TEXTUREFORMAT_R8G8B8A8_UNORM, uint32(img.Bounds().Dx()), uint32(img.Bounds().Dy()), img.Pix)
+			o.renderer.SetImage(trimImage, tex)
+		} else {
+			tex, err = sampleDesktop(o, trimImage, 1600, 1000)
+			v.St.Shown = in
+		}
+		if err != nil {
+			return nil, nil, err
+		}
+		v.St.Frame = trimImage
+		release = func() { o.renderer.SetImage(trimImage, nil); o.device.ReleaseTexture(tex) }
+	}
+	return &trimScene{v: v}, release, nil
 }

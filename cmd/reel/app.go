@@ -97,6 +97,7 @@ func runApp(args []string) error {
 	exitAfter := fs.Duration("exit-after", 0, "quit by itself after this long (unattended runs)")
 	size := fs.String("size", "720x640", "window size in points, WxH")
 	themeMode := fs.String("theme", "", "the window's theme, light|dark (default: the system's)")
+	trimFile := fs.String("trim", "", "dev: open on the trim screen for this recording (unattended runs)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -137,8 +138,12 @@ func runApp(args []string) error {
 	hud := newHUD(a, c)
 	c.onLive = hud.live
 	c.selectArea = func() { selectArea(a, c) }
+	c.openTrim = func(path string) { openTrim(a, c, path) }
 	c.show()
 	c.refresh()
+	if *trimFile != "" {
+		openTrim(a, c, *trimFile)
+	}
 	if err := platform.OnHotKey(func() { c.post(c.hotKey) }); err != nil {
 		slog.Warn("app: "+platform.HotKeyName+" won't work", "err", err)
 	}

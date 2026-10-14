@@ -96,6 +96,6 @@ func sampleActions() home.Actions {
 	return home.Actions{
 		AskScreen: nop, AskMic: nop, SetTarget: func(home.Target) {}, PickDisplay: nop1, PickWindow: nop1,
 		SelectArea: nop, PickMic: nop1, SetSystemAudio: func(bool) {}, Record: nop, Pause: nop, Resume: nop,
-		Stop: nop, Copy: nop1, Reveal: nop1, Open: nop1, Delete: nop1, OpenFolder: nop,
+		Stop: nop, Copy: nop1, Reveal: nop1, Open: nop1, Delete: nop1, Trim: nop1, OpenFolder: nop,
 	}
 }

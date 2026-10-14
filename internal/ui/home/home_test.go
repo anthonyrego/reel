@@ -48,6 +48,7 @@ func clickAll(t *testing.T, v *View) map[string]int {
 		Copy:           func(string) { ran["copy"]++ },
 		Reveal:         func(string) { ran["reveal"]++ },
 		Delete:         func(string) { ran["delete"]++ },
+		Trim:           func(string) { ran["trim"]++ },
 	}
 	var l draw.List
 	v.Draw(c, &l, 720, 640)

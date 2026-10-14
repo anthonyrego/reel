@@ -43,6 +43,8 @@ type controller struct {
 	onLive func(live bool)
 	// selectArea lets the user drag out an area (the app's overlay).
 	selectArea func()
+	// openTrim shows the trim screen for a recording.
+	openTrim func(path string)
 
 	mu      sync.Mutex
 	pending []func()
@@ -64,6 +66,7 @@ type controller struct {
 	toast     string
 	toastAt   time.Time
 	gathering bool
+	again     bool // a refresh was asked for while gathering
 }
 
 func newController(paths config.Paths, v *home.View) *controller {
@@ -83,6 +86,11 @@ func newController(paths config.Paths, v *home.View) *controller {
 		},
 		Record: c.record, Pause: c.pause, Resume: c.resume, Stop: c.stop,
 		Copy: c.copy, Reveal: c.reveal, Open: c.open, Delete: c.delete, OpenFolder: c.openFolder,
+		Trim: func(path string) {
+			if c.openTrim != nil {
+				c.openTrim(path)
+			}
+		},
 	}
 	return c
 }
@@ -116,9 +124,11 @@ func (c *controller) woke() {
 }
 
 // refresh lists the permissions, what can be recorded, the mics and the
-// recordings again, off the main thread.
+// recordings again, off the main thread. Asked for while it's gathering,
+// it gathers again after.
 func (c *controller) refresh() {
 	if c.gathering {
+		c.again = true
 		return
 	}
 	c.gathering = true
@@ -147,6 +157,10 @@ func (c *controller) refresh() {
 			}
 			c.names = mac.DisplayNames() // AppKit: main thread
 			c.settle()
+			if c.again {
+				c.again = false
+				c.refresh()
+			}
 		})
 	}()
 }

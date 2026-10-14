@@ -10,7 +10,7 @@ Pick a display, a window or a part of the screen, press ⌃⌥R and talk. Reel r
 - **Out of the way.** A small floating control shows the time, pause and stop. ⌃⌥R works from any app, and Reel's own windows never show up in a recording.
 - **An MP4 that plays anywhere,** written as it records, so a crash costs seconds, not the recording.
 
-**Status:** early. The recording pipeline is done and tested (milestones M0–M4); the app (M5) is being tried out; trimming (M6) is next. The design and milestones are in [docs/plan.md](docs/plan.md).
+**Status:** early. The recording pipeline is done and tested (milestones M0–M4); the app (M5) and trimming (M6) are being tried out. The design and milestones are in [docs/plan.md](docs/plan.md).
 
 ## Requirements
 
