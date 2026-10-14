@@ -65,6 +65,9 @@ type surface struct {
 	// transparent clears frames to nothing: the window (made see-through
 	// by platform.Float) draws its own shape.
 	transparent bool
+	// hidden is a window kept off screen for later: it isn't drawn.
+	hidden bool
+	frames int // drawn
 }
 
 // winApp is the windows, their renderer and the text pipeline. All of its
@@ -93,6 +96,7 @@ func runApp(args []string) error {
 	exitAfter := fs.Duration("exit-after", 0, "quit by itself after this long (unattended runs)")
 	size := fs.String("size", "800x640", "window size in points, WxH")
 	trimFile := fs.String("trim", "", "dev: open on the trim screen for this recording (unattended runs)")
+	fakeCam := fs.Bool("fake-camera", false, "dev: the camera bubble shows a fake camera (agents: no camera is opened)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -129,6 +133,14 @@ func runApp(args []string) error {
 	c.thumbs = newThumbs(a.device, a.renderer, c.post)
 	defer c.thumbs.close()
 	a.setScene(&homeScene{v: v, woken: c.woke, focused: c.refresh, drew: c.drew})
+	feed := newCamFeed(c.post)
+	bub := newBubble(a, feed)
+	defer bub.close()
+	defer feed.stop()
+	if *fakeCam {
+		bub.show(fitInto(draw.Rect{X: -1e6}, usableAt(0, 0)))
+		feed.want(fakeCamera)
+	}
 	hud := newHUD(a, c)
 	c.onLive = hud.live
 	c.selectArea = func() { selectArea(a, c) }
@@ -269,7 +281,7 @@ func (a *winApp) run(exitAfter time.Duration) error {
 		time.AfterFunc(exitAfter, func() { sdl.PushEvent(&sdl.Event{Type: sdl.EVENT_QUIT}) })
 	}
 	quit := func() error {
-		slog.Info("quit", "frames", a.frames.Load(), "uptime", time.Since(start).Round(time.Millisecond))
+		slog.Info("quit", "frames", a.frames.Load(), "mainFrames", a.main.frames, "uptime", time.Since(start).Round(time.Millisecond))
 		return nil
 	}
 
@@ -295,7 +307,7 @@ func (a *winApp) run(exitAfter time.Duration) error {
 	for {
 		animating, stalled := false, false
 		for _, s := range a.surfaces {
-			if s.scene == nil {
+			if s.scene == nil || s.hidden {
 				continue
 			}
 			if s.dirty || s.more || s.scene.animating() {
@@ -429,4 +441,5 @@ func (a *winApp) render(s *surface) {
 		slog.Error("submit", "err", err)
 	}
 	a.frames.Add(1)
+	s.frames++
 }

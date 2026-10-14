@@ -10,6 +10,8 @@ const (
 	// trimImage is the trim screen's picture; trimStrip its filmstrip.
 	trimImage draw.ImageID = 2
 	trimStrip draw.ImageID = 3
+	// cameraImage is the camera bubble's picture.
+	cameraImage draw.ImageID = 4
 	// thumbBase is the first of the recordings' pictures (see thumbs).
 	thumbBase draw.ImageID = 1000
 )

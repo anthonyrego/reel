@@ -1,7 +1,7 @@
 // Package icons draws reel's small line icons into a draw.List: what to
 // record (a display, a window, an area), the sound (a mic, the speaker),
-// what can be done with a recording (copy, trim, show in Finder, delete)
-// and the transport (play, pause, stop). Each is drawn on a 24-unit grid
+// the camera, what can be done with a recording (copy, trim, show in
+// Finder, delete) and the transport (play, pause, stop). Each is drawn on a 24-unit grid
 // scaled into a size×size box around a center, in lines of one weight, so
 // they sit together. Pure.
 package icons
@@ -140,6 +140,19 @@ func MicOff(l *draw.List, cx, cy, size float32, col draw.Color) {
 	newPen(l, cx, cy, size, col).line(3.5, 3.5, 20.5, 20.5)
 }
 
+// Camera is a video camera: the camera bubble.
+func Camera(l *draw.List, cx, cy, size float32, col draw.Color) {
+	p := newPen(l, cx, cy, size, col)
+	p.box(2.5, 6, 15.5, 18, 2.5)
+	p.ring(15.5, 10.5, 21.5, 7, 21.5, 17, 15.5, 13.5)
+}
+
+// CameraOff is a video camera struck through: none, or it stopped.
+func CameraOff(l *draw.List, cx, cy, size float32, col draw.Color) {
+	Camera(l, cx, cy, size, col)
+	newPen(l, cx, cy, size, col).line(3.5, 3.5, 20.5, 20.5)
+}
+
 func speakerBody(p pen) { p.ring(3, 9, 7, 9, 12, 4.5, 12, 19.5, 7, 15, 3, 15) }
 
 // Speaker is a speaker sounding: system audio on.
@@ -251,7 +264,7 @@ func Film(l *draw.List, cx, cy, size float32, col draw.Color) {
 // All are every icon by name (tests, renders).
 var All = map[string]Icon{
 	"display": Display, "window": Window, "area": Area,
-	"mic": Mic, "mic-off": MicOff, "speaker": Speaker, "speaker-off": SpeakerOff,
+	"mic": Mic, "mic-off": MicOff, "camera": Camera, "camera-off": CameraOff, "speaker": Speaker, "speaker-off": SpeakerOff,
 	"copy": Copy, "trim": Trim, "reveal": Reveal, "trash": Trash, "folder": Folder,
 	"check": Check, "chevron-down": ChevronDown, "chevron-left": ChevronLeft, "warning": Warning,
 	"play": Play, "pause": Pause, "stop": Stop, "film": Film,

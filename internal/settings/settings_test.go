@@ -13,6 +13,7 @@ func TestRoundTrip(t *testing.T) {
 	}
 	s.Target, s.Mic, s.MicChosen, s.SystemAudio = "area", "usb-interface", true, false
 	s.Area = &Area{Display: 2, X: 10, Y: 20, W: 1280, H: 720}
+	s.Camera, s.Bubble = "camera-uid", &Bubble{X: -400, Y: 900, Size: 260}
 	if err := s.Save(path); err != nil {
 		t.Fatal(err)
 	}
@@ -20,7 +21,8 @@ func TestRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Target != "area" || got.Mic != "usb-interface" || got.SystemAudio || got.Area == nil || *got.Area != *s.Area {
+	if got.Target != "area" || got.Mic != "usb-interface" || got.SystemAudio || got.Area == nil || *got.Area != *s.Area ||
+		got.Camera != "camera-uid" || got.Bubble == nil || *got.Bubble != *s.Bubble {
 		t.Errorf("got %+v", got)
 	}
 }

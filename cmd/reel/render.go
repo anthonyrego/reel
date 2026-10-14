@@ -115,7 +115,7 @@ func runRender(args []string) error {
 	scale := fs.Float64("scale", 2, "pixels per logical unit")
 	state := fs.String("state", "idle", "the main window's sample state: "+sampleNames())
 	hover := fs.String("hover", "", "move the pointer here first (a tooltip shows): X,Y in logical units")
-	sceneName := fs.String("scene", "home", "what to draw: home (the main window), hud (the floating controls, at -state live or paused), area (the area picker over a made-up desktop), icons (every icon at three sizes) or trim (the trim screen, at -state "+strings.Join(trimStates, ", ")+")")
+	sceneName := fs.String("scene", "home", "what to draw: home (the main window), hud (the floating controls, at -state live or paused), area (the area picker over a made-up desktop), icons (every icon at three sizes), bubble (the camera bubble, at -state picture, placeholder or off) or trim (the trim screen, at -state "+strings.Join(trimStates, ", ")+")")
 	file := fs.String("file", "", "with -scene trim: show this recording's picture (default: a made-up one)")
 	live := fs.Bool("live", false, "draw this Mac's real state (permissions, displays, mics, recordings) through the controller, menus closed")
 	if err := fs.Parse(args); err != nil {
@@ -125,7 +125,7 @@ func runRender(args []string) error {
 		return fmt.Errorf("-out is required")
 	}
 	sample, ok := samples[*state]
-	if !ok && *sceneName != "trim" {
+	if !ok && *sceneName != "trim" && *sceneName != "bubble" {
 		return fmt.Errorf("-state %q: one of %s", *state, sampleNames())
 	}
 	if !ok {
@@ -223,9 +223,28 @@ func runRender(args []string) error {
 		sc = as
 	case "icons":
 		sc = iconSheet{}
+	case "bubble":
+		look := *state
+		if look == "idle" {
+			look = "picture"
+		}
+		if look != "picture" && look != "placeholder" && look != "off" {
+			return fmt.Errorf("-scene bubble -state %q: picture, placeholder or off", look)
+		}
+		side := float32(bubbleDefault)
+		w, h = side+2*bubblePad, side+2*bubblePad
+		if look == "picture" {
+			tex, err := sampleCamera(o, int(side*float32(*scale)))
+			if err != nil {
+				return err
+			}
+			defer o.device.ReleaseTexture(tex)
+		}
+		sc = bubbleSample{pic: look == "picture", failed: look == "off"}
+		pal.Background = draw.RGB(0x6a7f9a) // a desktop to float over
 	case "home":
 	default:
-		return fmt.Errorf("-scene %q: home, hud, area, trim or icons", *sceneName)
+		return fmt.Errorf("-scene %q: home, hud, area, trim, bubble or icons", *sceneName)
 	}
 	img, err := o.image(sc, w, h, float32(*scale), pal, now)
 	if err != nil {
@@ -392,6 +411,32 @@ func sampleTrim(o *offscreen, file, state string, w, h, scale float32) (scene, f
 
 // iconSheet draws every icon at three sizes, with its name.
 type iconSheet struct{}
+
+// bubbleSample is the camera bubble drawn alone.
+type bubbleSample struct{ pic, failed bool }
+
+func (b bubbleSample) draw(c *ui.Ctx, l *draw.List, w, h float32) {
+	drawBubble(c, l, w, h, b.pic, b.failed)
+}
+func (bubbleSample) event(*ui.Ctx, ui.Event) bool { return false }
+func (bubbleSample) animating() bool              { return false }
+func (bubbleSample) woke()                        {}
+
+// sampleCamera registers the fake camera's picture, cut as the bubble
+// cuts a frame (side pixels), as the bubble's image.
+func sampleCamera(o *offscreen, side int) (*sdl.GPUTexture, error) {
+	pix := make([]byte, fakeCamW*fakeCamH*4)
+	fakePicture(pix, 40, false)
+	img := image.NewRGBA(image.Rect(0, 0, side, side))
+	var cut thumb.Bubble
+	cut.Cut(img, pix, fakeCamW, fakeCamH, fakeCamW*4)
+	tex, err := gfx.UploadTexture(o.device, sdl.GPU_TEXTUREFORMAT_R8G8B8A8_UNORM, uint32(side), uint32(side), img.Pix)
+	if err != nil {
+		return nil, err
+	}
+	o.renderer.SetImage(cameraImage, tex)
+	return tex, nil
+}
 
 func (iconSheet) draw(c *ui.Ctx, l *draw.List, w, h float32) {
 	names := slices.Sorted(maps.Keys(icons.All))

@@ -1,5 +1,6 @@
 // Package settings keeps what the user chose between runs: what to
-// record, the microphone, system audio, the last area. Pure.
+// record, the microphone, system audio, the last area, the camera and
+// where its bubble sits. Pure.
 package settings
 
 import (
@@ -19,6 +20,18 @@ type Settings struct {
 	SystemAudio bool   `json:"systemAudio"`
 	Area        *Area  `json:"area,omitempty"`
 	FPS         int    `json:"fps"`
+	// Camera is the bubble's camera (AVCaptureDevice uniqueID); "" for
+	// none, a new user's choice.
+	Camera string  `json:"camera,omitempty"`
+	Bubble *Bubble `json:"bubble,omitempty"`
+}
+
+// Bubble is where the camera bubble sits: its circle's top-left corner
+// and diameter, in global points (y down from the main display's top).
+type Bubble struct {
+	X    float64 `json:"x"`
+	Y    float64 `json:"y"`
+	Size float64 `json:"size"`
 }
 
 // Area is a part of a display, in the display's own points.
