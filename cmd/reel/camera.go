@@ -24,12 +24,19 @@ import (
 // fakeCamera is the camera ID that opens the fake camera.
 const fakeCamera = "fake"
 
-// bubbleDelay is how long after a camera frame's PTS it's in a recording:
-// the cut, the bubble's frame on the main thread, the screen's refresh
-// and ScreenCaptureKit's capture. selftest -camera measures it; with the
-// camera's own lag (each frame's arrival less its PTS, measured live) it's
-// how much later the mic is placed so the voice meets the face.
-const bubbleDelay = 0 * time.Millisecond
+// bubbleRefreshes is how many of its display's refreshes after the
+// camera hands a frame over it's in a recording: the cut, the bubble's
+// next frame on the main thread, the compositor and ScreenCaptureKit's
+// capture. selftest -camera measures it: 3.3 to 4.1 refreshes (111 to
+// 138 ms) in five runs at 30 Hz (2026-10-14). With the camera's own lag
+// (each frame's arrival less its PTS, measured live) it's how much later
+// the mic is placed, so the voice meets the face.
+const bubbleRefreshes = 3.9
+
+// bubbleDelay is bubbleRefreshes at a display's refresh interval.
+func bubbleDelay(refresh time.Duration) time.Duration {
+	return time.Duration(bubbleRefreshes * float64(refresh))
+}
 
 // camFeed is the bubble's camera.
 type camFeed struct {

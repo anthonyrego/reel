@@ -117,6 +117,11 @@ func (b *bubble) place(r draw.Rect) {
 	b.s.dirty = true
 }
 
+// refresh is the refresh interval of the bubble's display.
+func (b *bubble) refresh() time.Duration {
+	return time.Duration(displayRefresh(b.s.win.Handle()) * float64(time.Second))
+}
+
 // windowNumber is the bubble's window as ScreenCaptureKit knows it.
 func (b *bubble) windowNumber() (uint32, error) { return platform.WindowNumber(b.s.win.Handle()) }
 

@@ -10,6 +10,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"image"
 	"io"
 	"math"
 	"os"
@@ -56,6 +57,14 @@ type expect struct {
 	// micDelay is how much later than its PTS the mic was placed
 	// (record.Config.MicDelay): the A/V checks take it off.
 	micDelay float64
+	// crop, when not empty, is where the beacon is in the frames (pixels):
+	// the flashes are read there. bubble, when not empty, is the inside
+	// of the camera bubble, flashing with the fake mic's clicks, and
+	// camLag the fake camera's lag (its frames' arrival less their PTS).
+	crop, bubble image.Rectangle
+	camLag       float64
+	// bubbleRefresh is the refresh interval of the bubble's display.
+	bubbleRefresh float64
 }
 
 // checks prints PASS/FAIL lines and remembers whether any failed.
@@ -124,7 +133,7 @@ func analyzeFile(c *checks, path string, want expect) {
 	if want.period <= 0 {
 		return
 	}
-	ps, err := luma(path)
+	ps, err := lumaIn(path, want.crop)
 	if err != nil {
 		c.check(false, "frames", "%v", err)
 		return
@@ -148,6 +157,49 @@ func analyzeFile(c *checks, path string, want expect) {
 	if !want.videoOnly {
 		analyzeAudio(c, path, f, onsets, want)
 	}
+	if !want.bubble.Empty() {
+		analyzeBubble(c, path, onsets, want)
+	}
+}
+
+// analyzeBubble checks the camera bubble in a self-test recording: it
+// flashed with every fake mic click (a frame from the fake camera, white
+// from the click's PTS), and the mic, placed later by MicDelay, meets the
+// flashes: lips meet the voice. How late a camera frame shows in the
+// recording is what bubbleRefreshes is set from.
+func analyzeBubble(c *checks, path string, flashes []float64, want expect) {
+	ps, err := lumaIn(path, want.bubble)
+	if err != nil {
+		c.check(false, "bubble frames", "%v", err)
+		return
+	}
+	onsets := avsync.Onsets(ps, avsync.Midway(ps), want.period/2)
+	expected := want.duration / want.period
+	c.check(math.Abs(float64(len(onsets))-expected) <= 1.5, "bubble flashes",
+		"%d in %.2f s (about %.1f expected), luma %.0f…%.0f", len(onsets), want.duration, expected, minV(ps), maxV(ps))
+	pcm, err := pcmMono(path, 48000)
+	if err != nil {
+		c.check(false, "decode audio", "%v", err)
+		return
+	}
+	m := measureAV(pcm, flashes, want.period, want.micAfter)
+	// Each flash with the nearest click, which is its own while they are
+	// less than half a period apart.
+	o := avsync.Summarize(avsync.Pair(onsets, m.mic, want.period*0.45))
+	c.check(o.N >= len(onsets)-2 && o.N > 0, "bubble with the mic", "%d of %d flashes have the mic's click", o.N, len(onsets))
+	if o.N == 0 {
+		return
+	}
+	// The click is at its PTS plus MicDelay; the flash where the frame
+	// stamped with it showed in the recording.
+	late := want.micDelay - o.Median
+	shown := late - want.camLag
+	c.note("bubble delay", "a camera frame is in the recording %.0f ms after its PTS: %.0f ms (%.1f refreshes) after the camera hands it over (the fake's lag %.0f ms)",
+		1000*late, 1000*shown, shown/want.bubbleRefresh, 1000*want.camLag)
+	grain := math.Max(want.refresh, want.frameDur)
+	c.check(math.Abs(o.Median) <= grain/2+0.010, "lip sync",
+		"mic click − bubble flash %+.1f ms, the mic placed %.0f ms later (p5 %+.1f, p95 %+.1f)",
+		1000*o.Median, 1000*want.micDelay, 1000*o.P5, 1000*o.P95)
 }
 
 // Audio sync limits.
@@ -369,7 +421,10 @@ func probeVideo(path string) (videoStream, error) {
 
 // luma is each video frame's mean brightness at its presentation time,
 // decoding every frame as stored (no frame-rate conversion).
-func luma(path string) ([]avsync.Point, error) {
+func luma(path string) ([]avsync.Point, error) { return lumaIn(path, image.Rectangle{}) }
+
+// lumaIn is luma read in crop (pixels; empty: the whole frame).
+func lumaIn(path string, crop image.Rectangle) ([]avsync.Point, error) {
 	times, err := exec.Command("ffprobe", "-v", "error", "-select_streams", "v:0",
 		"-show_entries", "frame=pts_time", "-of", "csv=p=0", path).Output()
 	if err != nil {
@@ -384,8 +439,12 @@ func luma(path string) ([]avsync.Point, error) {
 		ts = append(ts, t)
 	}
 	const w, h = 16, 10
+	vf := fmt.Sprintf("scale=%d:%d,format=gray", w, h)
+	if !crop.Empty() {
+		vf = fmt.Sprintf("crop=%d:%d:%d:%d,", crop.Dx(), crop.Dy(), crop.Min.X, crop.Min.Y) + vf
+	}
 	raw, err := exec.Command("ffmpeg", "-v", "error", "-i", path, "-map", "0:v:0", "-fps_mode", "passthrough",
-		"-vf", fmt.Sprintf("scale=%d:%d,format=gray", w, h), "-f", "rawvideo", "-").Output()
+		"-vf", vf, "-f", "rawvideo", "-").Output()
 	if err != nil {
 		return nil, fmt.Errorf("ffmpeg: %w", err)
 	}

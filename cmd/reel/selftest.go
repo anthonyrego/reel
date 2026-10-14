@@ -9,15 +9,26 @@ package main
 // microphone can join them: clicks a quarter period after each flash, at
 // 44.1 kHz from a clock running -mic-ppm fast, fed in as a mic would be,
 // so resampling and drift correction run without a device.
+//
+// With -camera, the camera bubble floats beside the beacon showing the
+// fake camera, which turns white whenever the fake mic clicks (a clap,
+// seen and heard). The recording is then of the display, but of reel's
+// windows only (the beacon and the bubble), as an area recording with the
+// bubble shown, and the bubble's flashes are checked against the mic's
+// clicks: the mic placed later by the camera's lag and bubbleRefreshes
+// should meet them.
 
 import (
 	"errors"
 	"flag"
 	"fmt"
+	"image"
+	"log/slog"
 	"math"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -25,6 +36,7 @@ import (
 
 	"github.com/anthonyrego/reel/internal/area"
 	"github.com/anthonyrego/reel/internal/config"
+	"github.com/anthonyrego/reel/internal/draw"
 	"github.com/anthonyrego/reel/internal/gfx"
 	"github.com/anthonyrego/reel/internal/logx"
 	"github.com/anthonyrego/reel/internal/mac"
@@ -52,6 +64,7 @@ func runSelftest(args []string) error {
 	fakeMic := fs.Bool("fake-mic", true, "feed a fake 44.1 kHz microphone between the clicks")
 	micPPM := fs.Float64("mic-ppm", 800, "how fast the fake mic's clock runs, in ppm")
 	micDelay := fs.Duration("mic-delay", 0, "place the mic this much later, as for the camera (the A/V checks expect it)")
+	camera := fs.Bool("camera", false, "the camera bubble beside the beacon, showing a fake camera that flashes with the fake mic's clicks; the mic placed by its lag and bubbleRefreshes")
 	fragment := fs.Duration("fragment", 0, "write a movie fragment this often (0: the default, 5s; -1s: none)")
 	fps := fs.Int("fps", 30, "the most frames a second")
 	out := fs.String("out", "", "the MP4 to write (default: <recordings>/selftest-<time>.mp4)")
@@ -68,6 +81,9 @@ func runSelftest(args []string) error {
 	}
 	if *trimEnd > 0 && (*trimEnd <= *trimStart || *trimEnd > *dur || *pauseAt > 0) {
 		return errors.New("-trim-to must come after -trim-from, within -for, without -pause-at")
+	}
+	if *camera && (*videoOnly || !*fakeMic || *pauseAt > 0 || *hideAt > 0 || *micDelay != 0) {
+		return errors.New("-camera needs the fake mic, and no -video-only, -pause-at, -hide-at or -mic-delay")
 	}
 	paths, err := config.Resolve()
 	if err != nil {
@@ -133,6 +149,13 @@ func runSelftest(args []string) error {
 	if err := b.begin(); err != nil {
 		return err
 	}
+	var cam *selftestCamera
+	if *camera {
+		if cam, err = startSelftestCamera(a, b, &cfg); err != nil {
+			return err
+		}
+		defer cam.close()
+	}
 	refresh := displayRefresh(a.window.Handle())
 	var hide, show atomic.Bool
 	b.onWake = func() {
@@ -157,6 +180,12 @@ func runSelftest(args []string) error {
 	got := make(chan outcome, 1)
 	go func() {
 		defer sdl.PushEvent(&sdl.Event{Type: sdl.EVENT_QUIT})
+		if cam != nil {
+			if cfg.MicDelay, err = cam.ready(); err != nil {
+				got <- outcome{err: err}
+				return
+			}
+		}
 		r, err := record.Start(cfg)
 		if err != nil {
 			got <- outcome{err: err}
@@ -228,6 +257,10 @@ func runSelftest(args []string) error {
 		duration: o.res.Duration.Seconds(), frameDur: 1 / float64(*fps), period: beaconPeriod.Seconds(),
 		videoOnly: *videoOnly, refresh: refresh,
 		micAfter: micAfter, micDelay: micDelay.Seconds(),
+	}
+	if cam != nil {
+		want.micDelay, want.crop, want.bubble, want.camLag = cfg.MicDelay.Seconds(), cam.beaconCrop, cam.bubbleCrop, cam.lag.Seconds()
+		want.bubbleRefresh = cam.refresh.Seconds()
 	}
 	analyzeFile(c, o.res.Path, want)
 	if *trimEnd > 0 {
@@ -327,3 +360,124 @@ func pauseBeacon(r *record.Recorder, b *beacon, pauseAt, pauseFor time.Duration)
 
 // pauseStill is how long the beacon stays still after a resume.
 const pauseStill = 2 * time.Second
+
+// selftestCamera is -camera's bubble and fake camera beside the beacon.
+type selftestCamera struct {
+	feed *camFeed
+	bub  *bubble
+	// beaconCrop and bubbleCrop are where the beacon and the inside of the
+	// bubble's circle are in the recording's frames, in pixels.
+	beaconCrop, bubbleCrop image.Rectangle
+	lag                    time.Duration // the fake camera's, when it was ready
+	refresh                time.Duration // the bubble's display's refresh interval
+
+	mu      sync.Mutex
+	pending []func()
+}
+
+// startSelftestCamera shows the bubble beside the beacon with the fake
+// camera in it, flashing with the fake mic's clicks, and sets cfg to
+// record the display around both, reel's windows only, showing the
+// bubble. Main thread, after the beacon has begun.
+func startSelftestCamera(a *winApp, b *beacon, cfg *record.Config) (*selftestCamera, error) {
+	sc := &selftestCamera{}
+	sc.feed = newCamFeed(func(fn func()) {
+		sc.mu.Lock()
+		sc.pending = append(sc.pending, fn)
+		sc.mu.Unlock()
+		platform.Wake()
+	})
+	wake := b.onWake
+	b.onWake = func() {
+		sc.mu.Lock()
+		fns := sc.pending
+		sc.pending = nil
+		sc.mu.Unlock()
+		for _, fn := range fns {
+			fn()
+		}
+		if wake != nil {
+			wake()
+		}
+	}
+	start := b.startHost
+	sc.feed.flash = func(host int64) bool {
+		t := time.Duration(host - start)
+		return t >= 0 && t%beaconPeriod >= fakeMicAfter && t%beaconPeriod < fakeMicAfter+beaconFlash
+	}
+
+	// The beacon's content (its title bar left out) and the bubble beside
+	// it, on the right if there's room.
+	bx, by, err := a.window.Handle().Position()
+	if err != nil {
+		return nil, err
+	}
+	beacon := draw.Rect{X: float32(bx), Y: float32(by), W: 480, H: 300}
+	const side, gap = 160, 24
+	r := draw.Rect{X: beacon.Right() + gap + bubblePad, Y: beacon.Bottom() - side, W: side, H: side}
+	if u := usableAt(beacon.X, beacon.Y); r.Right()+bubblePad > u.Right() {
+		r.X = beacon.X - gap - bubblePad - side
+	}
+	sc.bub = newBubble(a, sc.feed)
+	sc.bub.show(r)
+	sc.refresh = sc.bub.refresh()
+	sc.feed.want(fakeCamera)
+	n, err := sc.bub.windowNumber()
+	if err != nil {
+		return nil, fmt.Errorf("the bubble's window: %w", err)
+	}
+
+	content, err := mac.ShareableContent()
+	if err != nil {
+		return nil, err
+	}
+	var d *mac.Display
+	for i, dd := range content.Displays {
+		f := dd.Frame
+		if mx, my := float64(beacon.X+beacon.W/2), float64(beacon.Y+beacon.H/2); mx >= f.X && mx < f.X+f.W && my >= f.Y && my < f.Y+f.H {
+			d = &content.Displays[i]
+		}
+	}
+	if d == nil {
+		return nil, errors.New("no display under the beacon")
+	}
+	both := draw.Rect{X: min(beacon.X, r.X), Y: min(beacon.Y, r.Y)}
+	both.W, both.H = max(beacon.Right(), r.Right())-both.X, max(beacon.Bottom(), r.Bottom())-both.Y
+	pw, ph := area.Pixels(float64(both.W), float64(both.H), d.Scale, area.MaxW, area.MaxH)
+	cfg.Video.Target = mac.Target{DisplayID: d.ID, OwnAppOnly: true, Show: []uint32{n}}
+	cfg.Video.SourceRect = mac.Rect{X: float64(both.X) - d.Frame.X, Y: float64(both.Y) - d.Frame.Y, W: float64(both.W), H: float64(both.H)}
+	cfg.Video.Width, cfg.Video.Height = pw, ph
+	px := func(q draw.Rect) image.Rectangle {
+		sx, sy := float32(pw)/both.W, float32(ph)/both.H
+		return image.Rect(int((q.X-both.X)*sx), int((q.Y-both.Y)*sy), int((q.Right()-both.X)*sx), int((q.Bottom()-both.Y)*sy))
+	}
+	sc.beaconCrop = px(beacon)
+	// The square inside the circle, a little in from it.
+	in := r.W * (1 - 1/math.Sqrt2*0.85) / 2
+	sc.bubbleCrop = px(draw.Rect{X: r.X + in, Y: r.Y + in, W: r.W - 2*in, H: r.H - 2*in})
+	slog.Info("selftest: the bubble", "rect", r, "source", cfg.Video.SourceRect, "size", fmt.Sprintf("%d×%d", pw, ph),
+		"beaconCrop", sc.beaconCrop, "bubbleCrop", sc.bubbleCrop)
+	return sc, nil
+}
+
+// ready waits for the fake camera's frames and returns how much later
+// the mic is placed: its lag and bubbleDelay, as the app places it. Any
+// goroutine.
+func (sc *selftestCamera) ready() (time.Duration, error) {
+	for deadline := time.Now().Add(cameraWait); ; time.Sleep(20 * time.Millisecond) {
+		if st, _ := sc.feed.status(); st == camLive {
+			break
+		}
+		if time.Now().After(deadline) {
+			return 0, errors.New("the fake camera sent nothing")
+		}
+	}
+	time.Sleep(500 * time.Millisecond) // a few frames' lag to take the median of
+	sc.lag, _ = sc.feed.lag()
+	return sc.lag + bubbleDelay(sc.refresh), nil
+}
+
+func (sc *selftestCamera) close() {
+	sc.feed.stop()
+	sc.bub.close()
+}

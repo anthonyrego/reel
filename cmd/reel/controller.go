@@ -664,7 +664,7 @@ func (c *controller) record() {
 			cfg.Video.Target.Show = []uint32{n}
 		}
 		if lag, got := c.feed.lag(); ok && got {
-			cfg.MicDelay = lag + bubbleDelay
+			cfg.MicDelay = lag + bubbleDelay(c.bub.refresh())
 		} else {
 			slog.Warn("app: no picture from the camera yet: recording anyway")
 		}
