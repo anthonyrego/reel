@@ -34,6 +34,10 @@ type Target struct {
 	// OwnAppOnly records only this app on the display: its windows and its
 	// sound (self-tests, which must not hear or see anything else).
 	OwnAppOnly bool
+	// Show are reel's own windows a display recording shows anyway (the
+	// camera bubble): the rest of reel is left out. Each must be on
+	// screen. A window recording can't show another window.
+	Show []uint32
 }
 
 // StreamConfig is a stream's setup.
@@ -354,12 +358,7 @@ func waitHandler(what string, send func(done objc.Block)) error {
 // withPool).
 func contentFilter(content objc.ID, t Target) (objc.ID, error) {
 	if t.WindowID != 0 {
-		var win objc.ID
-		each(content.Send(sel("windows")), func(w objc.ID) {
-			if win == 0 && objc.Send[uint32](w, sel("windowID")) == t.WindowID {
-				win = w
-			}
-		})
+		win := findWindow(content, t.WindowID)
 		if win == 0 {
 			return 0, fmt.Errorf("stream: no window %d", t.WindowID)
 		}
@@ -375,6 +374,14 @@ func contentFilter(content objc.ID, t Target) (objc.ID, error) {
 		return 0, fmt.Errorf("stream: no display %d", t.DisplayID)
 	}
 	self := ownApp(content.Send(sel("applications")))
+	var show []objc.ID
+	for _, id := range t.Show {
+		win := findWindow(content, id)
+		if win == 0 {
+			return 0, fmt.Errorf("stream: no window %d to show", id)
+		}
+		show = append(show, win)
+	}
 	if t.OwnAppOnly {
 		if self == 0 {
 			return 0, errors.New("stream: ScreenCaptureKit doesn't list reel (it lists only apps with a window)")
@@ -386,8 +393,22 @@ func contentFilter(content objc.ID, t Target) (objc.ID, error) {
 	if self != 0 {
 		exclude = nsArray(self)
 	}
+	// The windows excepted from an excluded app are the ones recorded
+	// anyway.
 	return class("SCContentFilter").Send(sel("alloc")).Send(sel("initWithDisplay:excludingApplications:exceptingWindows:"),
-		display, exclude, nsArray()).Send(sel("autorelease")), nil
+		display, exclude, nsArray(show...)).Send(sel("autorelease")), nil
+}
+
+// findWindow is the SCWindow with a window number among the shareable
+// content's (0 if there's none).
+func findWindow(content objc.ID, id uint32) objc.ID {
+	var win objc.ID
+	each(content.Send(sel("windows")), func(w objc.ID) {
+		if win == 0 && objc.Send[uint32](w, sel("windowID")) == id {
+			win = w
+		}
+	})
+	return win
 }
 
 // ownApp is this process among ScreenCaptureKit's applications.
