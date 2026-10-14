@@ -63,6 +63,15 @@ var selectors = map[string][]string{
 	"AVAssetWriterInput": {"initWithMediaType:outputSettings:", "setExpectsMediaDataInRealTime:", "isReadyForMoreMediaData",
 		"appendSampleBuffer:", "markAsFinished"},
 
+	"+AVURLAsset":           {"URLAssetWithURL:options:"},
+	"+AVAssetExportSession": {"exportSessionWithAsset:presetName:"},
+	"AVAssetExportSession": {"supportedFileTypes", "setOutputURL:", "setOutputFileType:", "setShouldOptimizeForNetworkUse:",
+		"setTimeRange:", "exportAsynchronouslyWithCompletionHandler:", "cancelExport", "status", "error"},
+	"+AVAssetImageGenerator": {"assetImageGeneratorWithAsset:"},
+	"AVAssetImageGenerator": {"setAppliesPreferredTrackTransform:", "setRequestedTimeToleranceBefore:",
+		"setRequestedTimeToleranceAfter:", "setMaximumSize:", "generateCGImageAsynchronouslyForTime:completionHandler:",
+		"cancelAllCGImageGeneration"},
+
 	"+AVCaptureDeviceDiscoverySession": {"discoverySessionWithDeviceTypes:mediaType:position:"},
 	"AVCaptureDeviceDiscoverySession":  {"devices"},
 	"+AVCaptureDevice":                 {"defaultDeviceWithMediaType:", "authorizationStatusForMediaType:", "requestAccessForMediaType:completionHandler:"},
@@ -109,7 +118,7 @@ var funcs = map[string][]string{
 // package reads, by library. Their values are never hard-coded: a constant
 // that changed under us would raise an exception later, far from here.
 var constants = map[string][]string{
-	avFoundationPath: {"AVMediaTypeAudio", "AVMediaTypeVideo", "AVCaptureDeviceTypeMicrophone", "AVFileTypeMPEG4",
+	avFoundationPath: {"AVMediaTypeAudio", "AVMediaTypeVideo", "AVCaptureDeviceTypeMicrophone", "AVFileTypeMPEG4", "AVAssetExportPresetPassthrough",
 		"AVVideoCodecKey", "AVVideoCodecTypeH264", "AVVideoWidthKey", "AVVideoHeightKey", "AVVideoCompressionPropertiesKey",
 		"AVVideoAverageBitRateKey", "AVVideoMaxKeyFrameIntervalDurationKey", "AVVideoAllowFrameReorderingKey",
 		"AVVideoProfileLevelKey", "AVVideoProfileLevelH264HighAutoLevel", "AVVideoExpectedSourceFrameRateKey",
@@ -265,6 +274,11 @@ func cString(p *byte) string {
 		n++
 	}
 	return string(unsafe.Slice(p, n))
+}
+
+// fileURL makes an autoreleased file NSURL (inside withPool).
+func fileURL(path string) objc.ID {
+	return class("NSURL").Send(sel("fileURLWithPath:"), nsString(path))
 }
 
 // nsArray makes an autoreleased NSArray of ids (inside withPool).

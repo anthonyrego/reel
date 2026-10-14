@@ -36,6 +36,9 @@ func (t CMTime) Seconds() float64 {
 	return float64(t.Value) / float64(t.Timescale)
 }
 
+// CMTimeRange is CoreMedia's CMTimeRange: Duration from Start.
+type CMTimeRange struct{ Start, Duration CMTime }
+
 // TimeOf is a valid CMTime of value/timescale seconds.
 func TimeOf(value int64, timescale int32) CMTime {
 	return CMTime{Value: value, Timescale: timescale, Flags: cmTimeValid}
