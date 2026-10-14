@@ -110,7 +110,6 @@ func runRender(args []string) error {
 	width := fs.Float64("width", 720, "window width, logical units")
 	height := fs.Float64("height", 640, "window height, logical units")
 	scale := fs.Float64("scale", 2, "pixels per logical unit")
-	dark := fs.Bool("dark", false, "use the dark palette")
 	state := fs.String("state", "idle", "the main window's sample state: "+sampleNames())
 	hover := fs.String("hover", "", "move the pointer here first: X,Y in logical units")
 	sceneName := fs.String("scene", "home", "what to draw: home (the main window), hud (the floating controls, at -state live or paused), area (the area picker over a made-up desktop) or trim (the trim screen, at -state "+strings.Join(trimStates, ", ")+")")
@@ -153,7 +152,7 @@ func runRender(args []string) error {
 		c.show()
 		menu = ""
 	}
-	pal := theme.For(*dark)
+	pal := theme.Dark
 	w, h := float32(*width), float32(*height)
 	c := &ui.Ctx{Text: o.shaper, Pal: pal, Scale: float32(*scale), Now: now}
 	// Lay it out once, so the pointer below finds the controls.

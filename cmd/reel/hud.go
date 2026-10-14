@@ -90,9 +90,8 @@ func showWindow(w *gfx.Window, activate bool) {
 func (h *hud) draw(c *ui.Ctx, l *draw.List, w, ht float32) {
 	h.hits.Begin()
 	t := h.hits.Texts()
-	// Always dark, whatever the theme: it floats over anything.
-	bg, fg, muted := draw.RGB(0x1c1c1e).WithAlpha(0xf0), draw.RGB(0xf5f5f7), draw.RGB(0x98989d)
-	red, amber := draw.RGB(0xff453a), draw.RGB(0xffd60a)
+	pal := c.Pal
+	bg, fg, muted, red, amber := pal.Bar, pal.Text, pal.TextMuted, pal.Live, pal.Warning
 	l.Rect(draw.Rect{W: w, H: ht}, bg, draw.Uniform(ht/2))
 
 	st := h.c.v.St

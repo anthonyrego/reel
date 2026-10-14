@@ -73,9 +73,9 @@ type winApp struct {
 	renderer *gfx.Renderer
 	glyphs   *text.GlyphCache
 	shaper   *text.Shaper
-	pal      theme.Palette
-	// theme is the theme asked for (see dark): "" follows the system.
-	theme string
+	// pal is always theme.Dark: reel is dark whatever the system's
+	// appearance, like its floating controls.
+	pal theme.Palette
 
 	main     *surface
 	surfaces []*surface
@@ -86,17 +86,11 @@ type winApp struct {
 	cleanup []func()
 }
 
-const (
-	themeLight = "light"
-	themeDark  = "dark"
-)
-
 func runApp(args []string) error {
 	fs := flag.NewFlagSet("app", flag.ContinueOnError)
 	debug := fs.Bool("debug", false, "enable GPU validation")
 	exitAfter := fs.Duration("exit-after", 0, "quit by itself after this long (unattended runs)")
-	size := fs.String("size", "720x640", "window size in points, WxH")
-	themeMode := fs.String("theme", "", "the window's theme, light|dark (default: the system's)")
+	size := fs.String("size", "800x640", "window size in points, WxH")
 	trimFile := fs.String("trim", "", "dev: open on the trim screen for this recording (unattended runs)")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -123,14 +117,11 @@ func runApp(args []string) error {
 		return err
 	}
 	defer a.close()
-	a.window.Handle().SetMinimumSize(560, 520)
-	switch *themeMode {
-	case "", themeLight, themeDark:
-		a.theme = *themeMode
-	default:
-		return fmt.Errorf("-theme %q: want light or dark", *themeMode)
+	a.window.Handle().SetMinimumSize(640, 520)
+	bg := a.pal.Background
+	if err := platform.DarkWindow(a.window.Handle(), uint32(bg.R)<<16|uint32(bg.G)<<8|uint32(bg.B)); err != nil {
+		slog.Warn("app: dark title bar", "err", err)
 	}
-	a.pal = theme.For(a.dark())
 
 	v := home.New()
 	c := newController(paths, v)
@@ -163,7 +154,7 @@ func openWindow(cfg gfx.WindowConfig, debug bool) (*winApp, error) {
 	if err := platform.Init(platform.Foreground); err != nil {
 		return nil, err
 	}
-	a := &winApp{pal: theme.For(sdl.GetSystemTheme() == sdl.SYSTEM_THEME_DARK)}
+	a := &winApp{pal: theme.Dark}
 	a.cleanup = append(a.cleanup, platform.Quit)
 	platform.QuitOnSignal()
 
@@ -231,18 +222,6 @@ func (a *winApp) close() {
 		a.cleanup[i]()
 	}
 	a.cleanup = nil
-}
-
-// dark reports whether the windows draw dark: the theme asked for, else
-// the system's.
-func (a *winApp) dark() bool {
-	switch a.theme {
-	case themeLight:
-		return false
-	case themeDark:
-		return true
-	}
-	return sdl.GetSystemTheme() == sdl.SYSTEM_THEME_DARK
 }
 
 // ctx is the widget context for a surface's frame.
@@ -349,9 +328,6 @@ func (a *winApp) run(exitAfter time.Duration) error {
 					return quit()
 				}
 				s.onClose()
-			case sdl.EVENT_SYSTEM_THEME_CHANGED:
-				a.pal = theme.For(a.dark())
-				all()
 			case sdl.EVENT_USER:
 				platform.WakeTaken()
 				// A woken scene may open or close windows: walk a copy.

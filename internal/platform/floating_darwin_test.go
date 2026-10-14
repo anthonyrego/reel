@@ -15,7 +15,28 @@ import (
 // Copied from an earlier project of the author's.
 func TestFloatingSelectors(t *testing.T) {
 	LoadSDL()
-	for cls, names := range floatingSelectors {
+	checkSelectors(t, floatingSelectors)
+	if err := loadPointerProperty(); err != nil {
+		t.Error(err)
+	}
+}
+
+// TestAppearanceSelectors checks DarkWindow's selectors and constants.
+func TestAppearanceSelectors(t *testing.T) {
+	LoadSDL()
+	checkSelectors(t, appearanceSelectors)
+	for _, name := range appearanceSymbols {
+		if _, err := purego.Dlsym(purego.RTLD_DEFAULT, name); err != nil {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+}
+
+// checkSelectors checks each class (a "+" prefix: its class methods)
+// responds to its selectors.
+func checkSelectors(t *testing.T, table map[string][]string) {
+	t.Helper()
+	for cls, names := range table {
 		name, classMethod := strings.CutPrefix(cls, "+")
 		c := objc.GetClass(name)
 		if c == 0 {
@@ -31,9 +52,6 @@ func TestFloatingSelectors(t *testing.T) {
 				t.Errorf("%s doesn't respond to %s", cls, s)
 			}
 		}
-	}
-	if err := loadPointerProperty(); err != nil {
-		t.Error(err)
 	}
 }
 

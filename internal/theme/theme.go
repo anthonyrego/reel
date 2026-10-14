@@ -1,6 +1,7 @@
 // Package theme holds the color tokens every component draws with. Components
-// never hard-code colors; they ask the active Palette. The app picks Light or
-// Dark from the OS setting.
+// never hard-code colors; they ask the active Palette. reel draws Dark
+// everywhere, whatever the OS setting: its colors are the floating
+// controls' (Apple's dark system colors).
 //
 // Copied from an earlier project of the author's.
 package theme
@@ -62,6 +63,11 @@ type Palette struct {
 	// Mark draws on the person's screen (mark_screen): vivid enough to
 	// find at a glance over any app.
 	Mark draw.Color
+
+	// Live is a recording: the Record button, the live dot. Trim frames
+	// the part of a recording a trim keeps.
+	Live draw.Color
+	Trim draw.Color
 
 	// Diagrams.
 	NodeFill   draw.Color
@@ -162,6 +168,9 @@ var Light = Palette{
 
 	Mark: draw.RGB(0xe8432e),
 
+	Live: draw.RGB(0xff3b30),
+	Trim: draw.RGB(0xf5b800),
+
 	NodeFill:   draw.RGB(0xffffff),
 	NodeStroke: draw.RGB(0x8a8a90),
 	EdgeStroke: draw.RGB(0x6b6b70),
@@ -186,19 +195,19 @@ var Light = Palette{
 var Dark = Palette{
 	Dark: true,
 
-	Background: draw.RGB(0x161618),
-	Surface:    draw.RGB(0x1f1f22),
-	SurfaceAlt: draw.RGB(0x28282c),
+	Background: draw.RGB(0x141416),
+	Surface:    draw.RGB(0x1c1c1e),
+	SurfaceAlt: draw.RGB(0x2c2c2e),
 	Border:     draw.RGB(0x38383d),
 	Shadow:     draw.Color{A: 0x70},
 
 	Backdrop: [4]draw.Color{draw.RGB(0x0d1220), draw.RGB(0x0e1525), draw.RGB(0x1a2642), draw.RGB(0x342c4e)},
-	Bar:      draw.RGB(0x1f1f22).WithAlpha(0xcb),
+	Bar:      draw.RGB(0x1c1c1e).WithAlpha(0xf0),
 	Glass:    0xcc,
 
-	Text:      draw.RGB(0xe8e8ea),
-	TextMuted: draw.RGB(0xa4a4aa),
-	TextFaint: draw.RGB(0x6c6c72),
+	Text:      draw.RGB(0xf5f5f7),
+	TextMuted: draw.RGB(0x98989d),
+	TextFaint: draw.RGB(0x636366),
 	Link:      draw.RGB(0x7aa7ff),
 
 	Accent:    draw.RGB(0x5b8def),
@@ -216,10 +225,13 @@ var Dark = Palette{
 
 	Info:    draw.RGB(0x5b8def),
 	Success: draw.RGB(0x4cc274),
-	Warning: draw.RGB(0xe0a82e),
-	Error:   draw.RGB(0xf06b7b),
+	Warning: draw.RGB(0xffd60a),
+	Error:   draw.RGB(0xff453a),
 
 	Mark: draw.RGB(0xff6a4d),
+
+	Live: draw.RGB(0xff453a),
+	Trim: draw.RGB(0xffd60a),
 
 	NodeFill:   draw.RGB(0x26262a),
 	NodeStroke: draw.RGB(0x6e6e76),

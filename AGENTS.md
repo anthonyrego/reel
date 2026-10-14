@@ -57,7 +57,7 @@ make build          # build/reel
 make check          # vet + test + shader manifest + build
 make app            # the signed build/Reel.app
 make run            # make app, then open it (user only: it can ask for permissions)
-make render         # offscreen PNG of the home scene -> build/render.png (ARGS="-dark", "-live", "-scene trim -state replace", "-scene trim -file X.mp4")
+make render         # offscreen PNG of the home scene -> build/render.png (ARGS="-live", "-scene trim -state replace", "-scene trim -file X.mp4")
 ./build/reel devices [-all]   # permissions, mics, displays, windows (opens nothing, asks nothing)
 REEL_DATA_DIR=$PWD/.dev/data ./build/reel probe -self -for 6s </dev/null   # agents: records only its own flashing, clicking window (kept on top) and reports what arrives
 ./build/reel probe -display main -mic default -for 10s   # user only: a display and a mic (also -window ID, -app Chrome, -system-audio=false)
