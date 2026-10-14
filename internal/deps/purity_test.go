@@ -31,6 +31,7 @@ var pure = []string{
 	"internal/settings",
 	"internal/text",
 	"internal/theme",
+	"internal/thumb",
 	"internal/timeline",
 	"internal/ui",
 }
