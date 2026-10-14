@@ -59,6 +59,66 @@ func TestTopmostWins(t *testing.T) {
 	}
 }
 
+// Hover and clicks keep to the control under the pointer when controls
+// before it come and go (a card's buttons), shifting its place in the
+// frame.
+func TestControlsKeepTheirPlace(t *testing.T) {
+	h := NewHits()
+	a := draw.Rect{X: 10, Y: 10, W: 50, H: 20}
+	extra := draw.Rect{X: 200, Y: 10, W: 50, H: 20}
+	clicks := 0
+	frame := func(withExtra bool) (overA, overExtra bool) {
+		h.Begin()
+		if withExtra {
+			overExtra = h.add(extra, true, nil)
+		}
+		return h.add(a, true, func() { clicks++ }), overExtra
+	}
+	frame(false)
+	h.Event(ev(ui.PointerMove, 20, 15))
+	if overA, overExtra := frame(true); !overA || overExtra {
+		t.Errorf("a control came before the hovered one: over it %v, over the new one %v", overA, overExtra)
+	}
+	h.Event(ev(ui.PointerDown, 20, 15))
+	frame(false) // a redraw between the press and the release
+	h.Event(ev(ui.PointerUp, 20, 15))
+	if clicks != 1 {
+		t.Errorf("pressed and released on it, redrawn between: %d clicks", clicks)
+	}
+}
+
+// A control drawn under a pointer that hasn't moved takes the hover, a
+// frame later.
+func TestHoverFollowsTheFrame(t *testing.T) {
+	c := ctx(t, time.Now())
+	frames := 0
+	c.Animate = func() { frames++ }
+	h := NewHits()
+	card := draw.Rect{W: 200, H: 100}
+	btn := draw.Rect{X: 10, Y: 10, W: 30, H: 30}
+	var overCard, overBtn bool
+	frame := func(withBtn bool) {
+		var l draw.List
+		h.Begin()
+		overCard = h.add(card, true, nil)
+		overBtn = false
+		if withBtn {
+			overBtn = h.add(btn, true, nil)
+		}
+		h.Tip(c, &l, 400, 300)
+	}
+	frame(false)
+	h.Event(ev(ui.PointerMove, 20, 20))
+	frame(true) // the card's buttons show now it's under the pointer
+	if frames == 0 {
+		t.Fatal("a button came under the pointer: no frame asked to show it")
+	}
+	frame(true)
+	if !overBtn || overCard {
+		t.Errorf("the frame after: over the button %v, over the card %v", overBtn, overCard)
+	}
+}
+
 func ctx(t *testing.T, now time.Time) *ui.Ctx {
 	t.Helper()
 	s, err := text.NewShaper()

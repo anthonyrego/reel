@@ -26,14 +26,20 @@ type hit struct {
 // Hits records this frame's controls and routes the pointer to them.
 type Hits struct {
 	hits  []hit
-	hover int // index into hits; -1 for none
-	press int // where the button went down; -1 for none
 	texts Texts
 
-	// The pointer, for tooltips: where it is (inside: in the window), the
-	// tooltip it's under and since when, and whether a press hid it.
-	pos       draw.Point
-	inside    bool
+	// The pointer: where it is (inside: in the window), the control it's
+	// over in the frame drawn last (hover, when hoverOK) and the one the
+	// button went down on (press, when pressOK). A control is known by its
+	// rect, which is the same from frame to frame where its place in the
+	// frame isn't: a card's buttons come and go before the cards after it.
+	pos              draw.Point
+	inside           bool
+	hover, press     draw.Rect
+	hoverOK, pressOK bool
+
+	// The tooltip the pointer is under and since when, and whether a
+	// press hid it.
 	tipAt     tipKey
 	tipSince  time.Time
 	tipHidden bool
@@ -51,13 +57,36 @@ type tipKey struct {
 }
 
 // NewHits returns an empty registry.
-func NewHits() *Hits { return &Hits{hover: -1, press: -1} }
+func NewHits() *Hits { return &Hits{} }
 
 // Begin starts a frame: the controls drawn after it are the ones that
-// take clicks.
+// take clicks. Those under the pointer are the ones over it in the frame
+// drawn last.
 func (h *Hits) Begin() {
+	h.hover, h.hoverOK = h.under()
 	h.hits = h.hits[:0]
 	h.menuWas, h.menuOpen = h.menuOpen, false
+}
+
+// top is the control at p drawn last (on top), -1 for none.
+func (h *Hits) top(p draw.Point) int {
+	for i := len(h.hits) - 1; i >= 0; i-- {
+		if h.hits[i].r.Contains(p) {
+			return i
+		}
+	}
+	return -1
+}
+
+// under is the rect of the control under the pointer.
+func (h *Hits) under() (draw.Rect, bool) {
+	if !h.inside {
+		return draw.Rect{}, false
+	}
+	if i := h.top(h.pos); i >= 0 {
+		return h.hits[i].r, true
+	}
+	return draw.Rect{}, false
 }
 
 // add records a control and reports whether the pointer is over it.
@@ -68,7 +97,7 @@ func (h *Hits) add(r draw.Rect, enabled bool, do func()) (hovered bool) {
 // addTip records a control with a tooltip.
 func (h *Hits) addTip(r draw.Rect, enabled bool, do func(), tip string) (hovered bool) {
 	h.hits = append(h.hits, hit{r: r, do: do, enabled: enabled, tip: tip})
-	return enabled && h.hover == len(h.hits)-1
+	return enabled && h.hoverOK && r == h.hover
 }
 
 // Hovered reports whether the pointer is over r (a control drawn some
@@ -89,27 +118,24 @@ func (h *Hits) AreaTip(r draw.Rect, tip string, enabled bool, do func()) bool {
 // whether to redraw, whether the event was on a control, and whether the
 // pointer is over one (for the cursor).
 func (h *Hits) Event(ev ui.Event) (redraw, handled, hand bool) {
-	at := -1
-	for i := len(h.hits) - 1; i >= 0; i-- { // the last drawn is on top
-		if h.hits[i].r.Contains(ev.Pos) {
-			at = i
-			break
-		}
+	at := h.top(ev.Pos)
+	switch ev.Kind {
+	case ui.PointerMove, ui.PointerDown, ui.PointerUp:
+		h.pos, h.inside = ev.Pos, true
 	}
 	switch ev.Kind {
 	case ui.PointerMove:
-		h.pos, h.inside = ev.Pos, true
-		if at != h.hover {
-			h.hover, h.tipHidden = at, false
+		if r, ok := h.under(); ok != h.hoverOK || r != h.hover {
+			h.hover, h.hoverOK, h.tipHidden = r, ok, false
 			redraw = true
 		}
 	case ui.PointerLeave:
-		redraw = h.hover >= 0
-		h.hover, h.press, h.inside = -1, -1, false
+		redraw = h.hoverOK
+		h.hoverOK, h.pressOK, h.inside = false, false, false
 	case ui.PointerDown:
 		h.tipHidden = true
 		if ev.Button == 1 {
-			h.press = at
+			h.press, h.pressOK = h.under()
 			handled = at >= 0
 		}
 	case ui.Wheel:
@@ -118,12 +144,12 @@ func (h *Hits) Event(ev ui.Event) (redraw, handled, hand bool) {
 			return true, true, at >= 0 && h.hits[at].enabled
 		}
 	case ui.PointerUp:
-		if ev.Button == 1 && at >= 0 && at == h.press && h.hits[at].enabled && h.hits[at].do != nil {
-			h.press = -1
+		pressed := h.pressOK
+		h.pressOK = false
+		if ev.Button == 1 && at >= 0 && pressed && h.hits[at].r == h.press && h.hits[at].enabled && h.hits[at].do != nil {
 			h.hits[at].do()
 			return true, true, true
 		}
-		h.press = -1
 	}
 	hand = at >= 0 && h.hits[at].enabled
 	return redraw, handled || at >= 0, hand

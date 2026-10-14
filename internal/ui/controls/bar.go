@@ -147,18 +147,18 @@ func (h *Hits) Chip(c *ui.Ctx, l *draw.List, r draw.Rect, icon icons.Icon, label
 // shows.
 const tipDelay = 400 * time.Millisecond
 
-// Tip draws the tooltip of the control under the pointer once it has
+// Tip ends a frame: when the frame put another control under the pointer
+// (a card's buttons came), it asks for a frame that shows it hovered.
+// It draws the tooltip of the control under the pointer once it has
 // rested there tipDelay (asking for frames until then) in a window w×h.
 // Call it after everything else.
 func (h *Hits) Tip(c *ui.Ctx, l *draw.List, w, ht float32) {
+	if r, ok := h.under(); ok != h.hoverOK || r != h.hover {
+		c.RequestFrame()
+	}
 	at := -1
 	if h.inside && !h.tipHidden {
-		for i := len(h.hits) - 1; i >= 0; i-- {
-			if h.hits[i].r.Contains(h.pos) {
-				at = i
-				break
-			}
-		}
+		at = h.top(h.pos)
 	}
 	if at < 0 || h.hits[at].tip == "" {
 		h.tipAt = tipKey{}
