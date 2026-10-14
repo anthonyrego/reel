@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"image"
 	"image/png"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -30,6 +31,7 @@ import (
 	"github.com/anthonyrego/reel/internal/ui"
 	"github.com/anthonyrego/reel/internal/ui/controls"
 	"github.com/anthonyrego/reel/internal/ui/home"
+	"github.com/anthonyrego/reel/internal/ui/icons"
 	"github.com/anthonyrego/reel/internal/ui/trim"
 )
 
@@ -112,7 +114,7 @@ func runRender(args []string) error {
 	scale := fs.Float64("scale", 2, "pixels per logical unit")
 	state := fs.String("state", "idle", "the main window's sample state: "+sampleNames())
 	hover := fs.String("hover", "", "move the pointer here first: X,Y in logical units")
-	sceneName := fs.String("scene", "home", "what to draw: home (the main window), hud (the floating controls, at -state live or paused), area (the area picker over a made-up desktop) or trim (the trim screen, at -state "+strings.Join(trimStates, ", ")+")")
+	sceneName := fs.String("scene", "home", "what to draw: home (the main window), hud (the floating controls, at -state live or paused), area (the area picker over a made-up desktop), icons (every icon at three sizes) or trim (the trim screen, at -state "+strings.Join(trimStates, ", ")+")")
 	file := fs.String("file", "", "with -scene trim: show this recording's picture (default: a made-up one)")
 	live := fs.Bool("live", false, "draw this Mac's real state (permissions, displays, mics, recordings) through the controller, menus closed")
 	if err := fs.Parse(args); err != nil {
@@ -191,9 +193,11 @@ func runRender(args []string) error {
 			as.have, as.from, as.to = true, draw.Point{X: w * 0.22, Y: h * 0.25}, draw.Point{X: w * 0.7, Y: h * 0.68}
 		}
 		sc = as
+	case "icons":
+		sc = iconSheet{}
 	case "home":
 	default:
-		return fmt.Errorf("-scene %q: home, hud, area or trim", *sceneName)
+		return fmt.Errorf("-scene %q: home, hud, area, trim or icons", *sceneName)
 	}
 	img, err := o.image(sc, w, h, float32(*scale), pal)
 	if err != nil {
@@ -305,3 +309,21 @@ func sampleTrim(o *offscreen, file, state string, edge int) (scene, func(), erro
 	}
 	return &trimScene{v: v}, release, nil
 }
+
+// iconSheet draws every icon at three sizes, with its name.
+type iconSheet struct{}
+
+func (iconSheet) draw(c *ui.Ctx, l *draw.List, w, h float32) {
+	names := slices.Sorted(maps.Keys(icons.All))
+	t := &controls.Texts{}
+	for i, name := range names {
+		x, y := float32(24+(i%4)*170), float32(24+(i/4)*56)
+		for j, size := range []float32{14, 18, 28} {
+			icons.All[name](l, x+float32(j)*36+14, y+14, size, c.Pal.Text)
+		}
+		controls.Put(l, t.Lay(c, name, text.SansRegular, 11), x, y+34, c.Pal.TextMuted)
+	}
+}
+func (iconSheet) event(*ui.Ctx, ui.Event) bool { return false }
+func (iconSheet) animating() bool              { return false }
+func (iconSheet) woke()                        {}
