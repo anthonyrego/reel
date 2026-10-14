@@ -141,6 +141,7 @@ func runApp(args []string) error {
 	defer c.feed.stop()
 	c.fakeCam = *fakeCam
 	c.bub.keep, c.bub.moved = c.recorded, c.keepBubble
+	c.bub.setLook(lookOf(c.set.Bubble))
 	c.onTrim = func() bool { _, trim := a.main.scene.(*trimScene); return trim }
 	// An agent's run can't bring reel to the front (macOS lets an app
 	// take focus only when the one in front yields it): with the fake

@@ -448,17 +448,26 @@ func (c *controller) fitBubble() {
 		r = c.bub.r
 	}
 	if fit := fitInto(r, usable); fit != r {
-		c.keepBubble(fit)
+		c.keepBubble(fit, c.bubbleLook())
 		if c.bub != nil && c.bub.shown() {
 			c.bub.place(fit)
 		}
 	}
 }
 
-// keepBubble saves where the bubble is.
-func (c *controller) keepBubble(r draw.Rect) {
-	c.set.Bubble = &settings.Bubble{X: float64(r.X), Y: float64(r.Y), Size: float64(r.W)}
+// keepBubble saves where the bubble is and how it looks.
+func (c *controller) keepBubble(r draw.Rect, k bubbleLook) {
+	c.set.Bubble = &settings.Bubble{X: float64(r.X), Y: float64(r.Y), Size: float64(r.W),
+		Zoom: k.crop.Zoom, PanX: k.crop.X, PanY: k.crop.Y, Round: float64(k.round)}
 	c.save()
+}
+
+// bubbleLook is how the bubble looks: as it was left.
+func (c *controller) bubbleLook() bubbleLook {
+	if c.bub != nil {
+		return c.bub.look
+	}
+	return lookOf(c.set.Bubble)
 }
 
 // recorded is the rect a recording showing the bubble keeps it in.
@@ -654,7 +663,7 @@ func (c *controller) record() {
 	c.syncCamera()
 	if fit := fitInto(c.bub.r, usable); fit != c.bub.r {
 		c.bub.place(fit)
-		c.keepBubble(fit)
+		c.keepBubble(fit, c.bub.look)
 	}
 	c.feed.ready(cameraWait, func(ok bool) {
 		n, err := c.bub.windowNumber()

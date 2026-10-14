@@ -120,5 +120,6 @@ const (
 	CursorPointer
 	CursorResizeH
 	CursorResizeV
-	CursorText // over a text field
+	CursorText       // over a text field
+	CursorResizeDiag // a corner's handle: top-left to bottom-right
 )

@@ -147,6 +147,8 @@ func setCursor(c ui.Cursor) {
 			id = sdl.SYSTEM_CURSOR_NS_RESIZE
 		case ui.CursorText:
 			id = sdl.SYSTEM_CURSOR_TEXT
+		case ui.CursorResizeDiag:
+			id = sdl.SYSTEM_CURSOR_NWSE_RESIZE
 		}
 		cur, _ = sdl.CreateSystemCursor(id)
 		cursors[c] = cur

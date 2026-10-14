@@ -45,9 +45,10 @@ type camFeed struct {
 	// (the self-test's flashes).
 	flash func(host int64) bool
 
-	// size is the bubble's side in pixels, which frames are cut to (the
-	// main thread sets it).
+	// size is the bubble's side in pixels, which frames are cut to, and
+	// crop the part of each frame (the main thread sets both).
 	size atomic.Int32
+	crop atomic.Pointer[thumb.Crop]
 
 	kick chan struct{} // the wanted camera changed
 	open atomic.Bool   // the worker has a camera open
@@ -202,7 +203,11 @@ func (f *camFeed) frame(id string, pix []byte, w, h, stride int, pts, arrived in
 	if f.back == nil || f.back.Rect.Dx() != d {
 		f.back = image.NewRGBA(image.Rect(0, 0, d, d))
 	}
-	f.cut.Cut(f.back, pix, w, h, stride, thumb.Crop{})
+	var c thumb.Crop
+	if p := f.crop.Load(); p != nil {
+		c = *p
+	}
+	f.cut.Cut(f.back, pix, w, h, stride, c)
 	f.mu.Lock()
 	if f.id != id || f.state == camFailed {
 		f.mu.Unlock()
@@ -241,6 +246,17 @@ func (f *camFeed) take(fn func(img *image.RGBA)) bool {
 	f.fresh = false
 	fn(f.front)
 	return true
+}
+
+// frameSize is the size of the camera's frames (the fake's before the
+// first): what the bubble's framing is clamped to.
+func (f *camFeed) frameSize() (w, h int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.w <= 0 || f.h <= 0 {
+		return fakeCamW, fakeCamH
+	}
+	return f.w, f.h
 }
 
 // status is what the wanted camera is doing, and why it failed.

@@ -419,6 +419,9 @@ func startSelftestCamera(a *winApp, b *beacon, cfg *record.Config) (*selftestCam
 		r.X = beacon.X - gap - bubblePad - side
 	}
 	sc.bub = newBubble(a, sc.feed)
+	// Recorded throughout: it stays put and never shows its handles, even
+	// with the pointer over it.
+	sc.bub.keep = func() (draw.Rect, bool) { return r, true }
 	sc.bub.show(r)
 	sc.refresh = sc.bub.refresh()
 	sc.feed.want(fakeCamera)
