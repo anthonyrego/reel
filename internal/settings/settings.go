@@ -1,6 +1,6 @@
 // Package settings keeps what the user chose between runs: what to
 // record, the microphone, system audio, the last area, the camera and
-// where its bubble sits. Pure.
+// where its bubble sits and how it looks. Pure.
 package settings
 
 import (
@@ -26,12 +26,33 @@ type Settings struct {
 	Bubble *Bubble `json:"bubble,omitempty"`
 }
 
-// Bubble is where the camera bubble sits: its circle's top-left corner
-// and diameter, in global points (y down from the main display's top).
+// Bubble is where the camera bubble sits (its square's top-left corner
+// and side, in global points, y down from the main display's top) and how
+// it looks: how far it zooms into the camera's picture (1: the middle
+// square), where the middle of what it shows is (from the picture's
+// middle, in its widths and heights, as seen: mirrored) and how round it
+// is (0 a square, 1 a circle).
 type Bubble struct {
-	X    float64 `json:"x"`
-	Y    float64 `json:"y"`
-	Size float64 `json:"size"`
+	X     float64 `json:"x"`
+	Y     float64 `json:"y"`
+	Size  float64 `json:"size"`
+	Zoom  float64 `json:"zoom"`
+	PanX  float64 `json:"panX"`
+	PanY  float64 `json:"panY"`
+	Round float64 `json:"round"`
+}
+
+// UnmarshalJSON reads a bubble, taking a look a file doesn't give (one
+// from before the bubble had a look) as the default: a circle showing the
+// middle square.
+func (b *Bubble) UnmarshalJSON(data []byte) error {
+	type plain Bubble
+	p := plain{Zoom: 1, Round: 1}
+	if err := json.Unmarshal(data, &p); err != nil {
+		return err
+	}
+	*b = Bubble(p)
+	return nil
 }
 
 // Area is a part of a display, in the display's own points.
