@@ -1,6 +1,6 @@
-// Package trim is the trim screen: one recording's picture, a track under
-// it with handles for where the copy starts and ends, and saving the copy
-// beside the recording or in its place. Dragging a handle shows the
+// Package trim is the trim screen: one recording's picture, a filmstrip
+// under it with handles for where the copy starts and ends, and saving
+// the copy beside the recording or in its place. Dragging a handle shows the
 // picture there. Pure: it draws a State and calls Actions; the app owns
 // both, and the view owns the range being chosen.
 package trim
@@ -13,11 +13,15 @@ import (
 	"github.com/anthonyrego/reel/internal/text"
 	"github.com/anthonyrego/reel/internal/ui"
 	"github.com/anthonyrego/reel/internal/ui/controls"
+	"github.com/anthonyrego/reel/internal/ui/icons"
 )
 
 // State is what the screen shows that the app knows.
 type State struct {
-	Name     string // the recording's
+	Name string // the recording's
+	// Title is what it's called on the screen (when it was made); ""
+	// shows Name.
+	Title    string
 	Duration time.Duration
 	// Width and Height are the picture's size, for its shape before the
 	// first one comes.
@@ -25,6 +29,9 @@ type State struct {
 	// Frame is the picture shown (0: none yet), the one at Shown.
 	Frame draw.ImageID
 	Shown time.Duration
+	// Strip is the filmstrip drawn in the track (0: none yet), made for
+	// the size TrackPixels says.
+	Strip draw.ImageID
 	// Busy says what's happening while the copy is written ("Saving…"):
 	// nothing can be changed.
 	Busy string
@@ -78,19 +85,29 @@ func (v *View) SetRange(in, out time.Duration) { v.in, v.out = in, out }
 // AskReplace shows Replace's second ask, for renders.
 func (v *View) AskReplace() { v.confirm = true }
 
+// TrackPixels is the track's size in pixels at scale, as last drawn: the
+// filmstrip to make (0, 0 before the first draw).
+func (v *View) TrackPixels(scale float32) (w, h int) {
+	return int(v.track.W*scale + 0.5), int(v.track.H*scale + 0.5)
+}
+
 const (
-	pad       = 28
-	titleSize = 22
-	bodySize  = 13.5
+	pad       = 20
+	bodySize  = 13
 	smallSize = 12
-	trackH    = 40
-	handleW   = 12
+	handleW   = 14
+	frameW    = 3 // the kept part's frame, top and bottom
 	// minKeep is the shortest copy.
 	minKeep = 500 * time.Millisecond
 	// nudge is how far an arrow key moves a handle (shift: bigNudge).
 	nudge    = 100 * time.Millisecond
 	bigNudge = time.Second
 )
+
+// TrackH is the track's height (the filmstrip's).
+const TrackH = 52
+
+const trackH = TrackH
 
 // Draw lays out and draws the screen at w×h.
 func (v *View) Draw(c *ui.Ctx, l *draw.List, w, h float32) {
@@ -99,49 +116,44 @@ func (v *View) Draw(c *ui.Ctx, l *draw.List, w, h float32) {
 	t := v.hits.Texts()
 	st := &v.St
 	busy := st.Busy != ""
-	y := float32(24)
 
-	// Title, the recording, Cancel.
-	title := t.Lay(c, "Trim", text.SansSemibold, titleSize)
-	controls.Put(l, title, pad, y, pal.Text)
-	bw := v.hits.ButtonWidth(c, "Cancel", controls.Secondary)
-	v.hits.Button(c, l, w-pad-bw, y-1, "Cancel", controls.Secondary, !busy && v.Act.Cancel != nil, v.Act.Cancel)
-	nx := pad + title.Width + 14
-	t.PutFit(c, l, st.Name, text.SansRegular, bodySize, nx, y+7, w-pad-bw-16-nx, pal.TextMuted)
-	y += 54
+	// Back to the recordings, and what this is.
+	v.back(c, l, 10, !busy && v.Act.Cancel != nil)
+	title := st.Title
+	if title == "" {
+		title = st.Name
+	}
+	tl := t.Lay(c, title, text.SansSemibold, 14)
+	dl := t.Lay(c, Length(st.Duration), text.SansRegular, bodySize)
+	tw := min(tl.Width, w-2*150)
+	tx := (w - tw - 10 - dl.Width) / 2
+	t.PutFit(c, l, title, text.SansSemibold, 14, tx, 26-tl.Height/2, tw, pal.Text)
+	controls.Put(l, dl, tx+tw+10, 26-dl.Height/2+0.5, pal.TextMuted)
+	y := float32(52)
 
 	// The bottom, from the bottom up: buttons, times, track.
 	by := h - pad - 28
-	ty := by - 34
-	v.track = draw.Rect{X: pad + handleW, Y: ty - 12 - trackH, W: w - 2*pad - 2*handleW, H: trackH}
+	ty := by - 30
+	v.track = draw.Rect{X: pad + handleW, Y: ty - 8 - trackH, W: w - 2*pad - 2*handleW, H: trackH}
 
 	// The picture, as large as fits above the track.
-	box := draw.Rect{X: pad, Y: y, W: w - 2*pad, H: v.track.Y - 20 - y}
+	box := draw.Rect{X: pad, Y: y, W: w - 2*pad, H: v.track.Y - 18 - y}
 	pic := fit(box, st.Width, st.Height)
-	l.Rect(box, pal.SurfaceAlt, draw.Uniform(8))
+	l.Rect(box, pal.Surface, draw.Uniform(12))
 	if st.Frame != 0 {
-		l.Image(pic, st.Frame, draw.Radii{}, 255)
+		l.Image(pic, st.Frame, draw.Uniform(min(12, pic.W/2)), 255)
 	} else {
 		lay := t.Lay(c, "Loading…", text.SansRegular, bodySize)
 		controls.Put(l, lay, box.X+(box.W-lay.Width)/2, box.Y+(box.H-lay.Height)/2, pal.TextMuted)
 	}
 
 	v.drawTrack(c, l)
+	v.times(c, l, w, ty)
 
-	// Times: the start under the left, the end under the right, what's
-	// kept between.
-	tl := t.Lay(c, "Start "+Stamp(v.in), text.SansRegular, smallSize)
-	controls.Put(l, tl, pad, ty, pal.TextMuted)
-	tr := t.Lay(c, "End "+Stamp(v.out), text.SansRegular, smallSize)
-	controls.Put(l, tr, w-pad-tr.Width, ty, pal.TextMuted)
-	kept := fmt.Sprintf("Keeps %s of %s", Length(v.out-v.in), Length(st.Duration))
-	tk := t.Lay(c, kept, text.SansSemibold, smallSize)
-	controls.Put(l, tk, (w-tk.Width)/2, ty, pal.Text)
-
-	// Buttons, right to left, and a line on the left: what's happening,
-	// what went wrong, or what Replace does.
+	// Buttons, right to left, and a line on the left: what's kept, or
+	// what's happening, what went wrong, what Replace does.
 	right := w - pad
-	note, noteCol := "", pal.TextMuted
+	note, noteCol, noteFont := fmt.Sprintf("Keeps %s of %s", Length(v.out-v.in), Length(st.Duration)), pal.Text, text.SansSemibold
 	cut := v.in > 0 || v.out < st.Duration
 	ok := cut && !busy
 	if v.confirm {
@@ -157,7 +169,7 @@ func (v *View) Draw(c *ui.Ctx, l *draw.List, w, h float32) {
 			v.hits.Button(c, l, right-bw, by, b.label, b.style, ok && v.Act.Replace != nil, b.do)
 			right -= bw + 8
 		}
-		note = "Replace the recording with the trim? The original goes to the Trash."
+		note, noteCol, noteFont = "Replace the recording with the trim? The original goes to the Trash.", pal.TextMuted, text.SansRegular
 	} else {
 		bw := v.hits.ButtonWidth(c, "Save as copy", controls.Primary)
 		v.hits.Button(c, l, right-bw, by, "Save as copy", controls.Primary, ok && v.Act.Copy != nil, func() { call2(v.Act.Copy, v.in, v.out) })
@@ -166,44 +178,104 @@ func (v *View) Draw(c *ui.Ctx, l *draw.List, w, h float32) {
 		v.hits.Button(c, l, right-bw, by, "Replace…", controls.Secondary, ok && v.Act.Replace != nil, func() { v.confirm = true })
 		right -= bw + 8
 		if !cut {
-			note = "Drag the ends of the track to choose what to keep."
+			note, noteCol, noteFont = "Drag the ends of the track to choose what to keep.", pal.TextMuted, text.SansRegular
 		}
 	}
 	switch {
 	case busy:
-		note, noteCol = st.Busy, pal.TextMuted
+		note, noteCol, noteFont = st.Busy, pal.TextMuted, text.SansRegular
 	case st.Error != "":
-		note, noteCol = st.Error, pal.Error
+		note, noteCol, noteFont = st.Error, pal.Error, text.SansRegular
 	}
-	if note != "" {
-		t.PutFit(c, l, note, text.SansRegular, smallSize, pad, by+7, right-pad-8, noteCol)
-	}
+	nl := t.Lay(c, note, noteFont, bodySize)
+	t.PutFit(c, l, note, noteFont, bodySize, pad, by+(28-nl.Height)/2, right-pad-8, noteCol)
+	v.hits.Tip(c, l, w, h)
 }
 
-// drawTrack draws the track: the whole recording, the part kept framed in
-// the accent with a handle at each end, and a line where the picture is.
+// back draws "‹ Recordings" at the top left: Cancel.
+func (v *View) back(c *ui.Ctx, l *draw.List, y float32, enabled bool) {
+	pal := c.Pal
+	lay := v.hits.Texts().Lay(c, "Recordings", text.SansRegular, bodySize)
+	r := draw.Rect{X: pad - 8, Y: y, W: lay.Width + 38, H: 32}
+	col := pal.TextMuted
+	switch {
+	case v.hits.AreaTip(r, "Back to the recordings (Esc)", enabled, v.Act.Cancel):
+		col = pal.Text
+		l.Rect(r, pal.Text.WithAlpha(0x16), draw.Uniform(r.H/2))
+	case !enabled:
+		col = pal.TextFaint
+	}
+	icons.ChevronLeft(l, r.X+16, r.Y+r.H/2, 16, col)
+	controls.Put(l, lay, r.X+28, r.Y+(r.H-lay.Height)/2, col)
+}
+
+// drawTrack draws the track: the filmstrip, darkened outside the part
+// kept, which is framed in the trim color with a handle at each end, and
+// a line where the picture is.
 func (v *View) drawTrack(c *ui.Ctx, l *draw.List) {
 	pal := c.Pal
 	r := v.track
-	l.BorderedRect(r, pal.SurfaceAlt, pal.Border, 1, draw.Uniform(6))
+	if v.St.Strip != 0 {
+		l.Rect(r, pal.Surface, draw.Uniform(6))
+		l.Image(r, v.St.Strip, draw.Uniform(6), 255)
+	} else {
+		l.BorderedRect(r, pal.Surface, pal.Border, 1, draw.Uniform(6))
+	}
 	x0, x1 := v.x(v.in), v.x(v.out)
-	kept := draw.Rect{X: x0, Y: r.Y, W: x1 - x0, H: r.H}
-	l.Rect(kept, pal.Accent.WithAlpha(0x30), draw.Radii{})
-	l.Rect(draw.Rect{X: x0, Y: r.Y, W: x1 - x0, H: 3}, pal.Accent, draw.Radii{})
-	l.Rect(draw.Rect{X: x0, Y: r.Bottom() - 3, W: x1 - x0, H: 3}, pal.Accent, draw.Radii{})
+	shade := draw.Color{A: 0x99}
+	if x0 > r.X {
+		l.Rect(draw.Rect{X: r.X, Y: r.Y, W: x0 - r.X, H: r.H}, shade, draw.Radii{6, 0, 0, 6})
+	}
+	if x1 < r.Right() {
+		l.Rect(draw.Rect{X: x1, Y: r.Y, W: r.Right() - x1, H: r.H}, shade, draw.Radii{0, 6, 6, 0})
+	}
+	col := pal.Trim
+	if v.St.Busy != "" {
+		col = pal.TextMuted
+	}
+	l.Rect(draw.Rect{X: x0, Y: r.Y - 2, W: x1 - x0, H: frameW}, col, draw.Radii{})
+	l.Rect(draw.Rect{X: x0, Y: r.Bottom() - frameW + 2, W: x1 - x0, H: frameW}, col, draw.Radii{})
 	if v.St.Frame != 0 && v.St.Duration > 0 {
 		sx := v.x(v.St.Shown)
-		l.Rect(draw.Rect{X: sx - 1, Y: r.Y - 4, W: 2, H: r.H + 8}, pal.Text, draw.Uniform(1))
+		l.Rect(draw.Rect{X: sx - 1, Y: r.Y - 6, W: 2, H: r.H + 12}, pal.Text, draw.Uniform(1))
 	}
 	for _, hd := range []handle{start, end} {
-		col := pal.Accent
+		hc := col
 		if v.drag == hd {
-			col = col.WithAlpha(0xd8)
+			hc = hc.WithAlpha(0xd8)
 		}
 		hr := v.handleRect(hd)
-		l.Rect(hr, col, draw.Uniform(4))
-		l.Rect(draw.Rect{X: hr.X + hr.W/2 - 1, Y: hr.Y + hr.H/2 - 8, W: 2, H: 16}, pal.Surface.WithAlpha(0xc0), draw.Uniform(1))
+		radii := draw.Radii{6, 0, 0, 6}
+		if hd == end {
+			radii = draw.Radii{0, 6, 6, 0}
+		}
+		l.Rect(hr, hc, radii)
+		grip := pal.Background.WithAlpha(0xb0)
+		l.Rect(draw.Rect{X: hr.X + hr.W/2 - 2.5, Y: hr.Y + hr.H/2 - 8, W: 1.5, H: 16}, grip, draw.Uniform(0.75))
+		l.Rect(draw.Rect{X: hr.X + hr.W/2 + 1, Y: hr.Y + hr.H/2 - 8, W: 1.5, H: 16}, grip, draw.Uniform(0.75))
 	}
+}
+
+// times draws where each end is under its handle, kept apart and inside
+// the window.
+func (v *View) times(c *ui.Ctx, l *draw.List, w, y float32) {
+	pal := c.Pal
+	t := v.hits.Texts()
+	a := t.Lay(c, Stamp(v.in), text.MonoRegular, 11.5)
+	b := t.Lay(c, Stamp(v.out), text.MonoRegular, 11.5)
+	ax := max(pad, v.x(v.in)-handleW/2-a.Width/2)
+	bx := min(w-pad-b.Width, v.x(v.out)+handleW/2-b.Width/2)
+	if over := ax + a.Width + 12 - bx; over > 0 {
+		ax, bx = ax-over/2, bx+over/2
+		if ax < pad {
+			ax, bx = pad, pad+a.Width+12
+		}
+		if bx+b.Width > w-pad {
+			bx, ax = w-pad-b.Width, w-pad-b.Width-12-a.Width
+		}
+	}
+	controls.Put(l, a, ax, y, pal.TextMuted)
+	controls.Put(l, b, bx, y, pal.TextMuted)
 }
 
 // handleRect is where a handle is drawn: outside the part kept, against

@@ -28,6 +28,7 @@ import (
 	"github.com/anthonyrego/reel/internal/platform"
 	"github.com/anthonyrego/reel/internal/text"
 	"github.com/anthonyrego/reel/internal/theme"
+	"github.com/anthonyrego/reel/internal/thumb"
 	"github.com/anthonyrego/reel/internal/ui"
 	"github.com/anthonyrego/reel/internal/ui/controls"
 	"github.com/anthonyrego/reel/internal/ui/home"
@@ -203,7 +204,7 @@ func runRender(args []string) error {
 		sc, w, h = &hud{c: c, hits: controls.NewHits()}, hudW, hudH
 		pal.Background = draw.RGB(0x6a7f9a) // a desktop to float over
 	case "trim":
-		ts, release, err := sampleTrim(o, *file, *state, int(w*float32(*scale)))
+		ts, release, err := sampleTrim(o, *file, *state, w, h, float32(*scale))
 		if err != nil {
 			return err
 		}
@@ -255,6 +256,16 @@ func sampleDesktop(o *offscreen, id draw.ImageID, pw, ph int) (*sdl.GPUTexture, 
 // samplePicture is sampleDesktop in one of a few looks (seed), for the
 // recordings' cards.
 func samplePicture(o *offscreen, id draw.ImageID, pw, ph, seed int) (*sdl.GPUTexture, error) {
+	tex, err := gfx.UploadTexture(o.device, sdl.GPU_TEXTUREFORMAT_R8G8B8A8_UNORM, uint32(pw), uint32(ph), samplePixels(pw, ph, seed).Pix)
+	if err != nil {
+		return nil, err
+	}
+	o.renderer.SetImage(id, tex)
+	return tex, nil
+}
+
+// samplePixels is a made-up desktop pw×ph in one of a few looks.
+func samplePixels(pw, ph, seed int) *image.RGBA {
 	bases := [][3]int{{40, 70, 150}, {110, 50, 90}, {30, 100, 100}, {140, 90, 40}, {70, 50, 140}, {50, 60, 70}}
 	layouts := [][][4]int{
 		{{pw / 10, ph / 8, pw / 2, ph / 2}, {pw / 2, ph / 3, pw * 9 / 10, ph * 5 / 6}},
@@ -280,24 +291,20 @@ func samplePicture(o *offscreen, id draw.ImageID, pw, ph, seed int) (*sdl.GPUTex
 			}
 		}
 	}
-	tex, err := gfx.UploadTexture(o.device, sdl.GPU_TEXTUREFORMAT_R8G8B8A8_UNORM, uint32(pw), uint32(ph), pix)
-	if err != nil {
-		return nil, err
-	}
-	o.renderer.SetImage(id, tex)
-	return tex, nil
+	return &image.RGBA{Pix: pix, Stride: 4 * pw, Rect: image.Rect(0, 0, pw, ph)}
 }
 
 // trimStates are the trim screen's sample states.
 var trimStates = []string{"idle", "uncut", "replace", "saving", "loading", "error"}
 
-// sampleTrim is the trim screen at a sample state, over a made-up picture
-// or, with file, that recording's.
-func sampleTrim(o *offscreen, file, state string, edge int) (scene, func(), error) {
+// sampleTrim is the trim screen w×h at scale in a sample state, over a
+// made-up picture and filmstrip or, with file, that recording's.
+func sampleTrim(o *offscreen, file, state string, w, h, scale float32) (scene, func(), error) {
+	edge := int(w * scale)
 	if !slices.Contains(trimStates, state) {
 		return nil, nil, fmt.Errorf("-state %q: with -scene trim, one of %s", state, strings.Join(trimStates, ", "))
 	}
-	st := trim.State{Name: "Recording 2026-10-13 at 15.04.05", Duration: 47300 * time.Millisecond, Width: 1600, Height: 1000}
+	st := trim.State{Name: "Recording 2026-10-13 at 15.04.05", Title: "3:04 PM", Duration: 47300 * time.Millisecond, Width: 1600, Height: 1000}
 	in, out := 4200*time.Millisecond, 31800*time.Millisecond
 	var img *image.RGBA
 	if file != "" {
@@ -307,6 +314,7 @@ func sampleTrim(o *offscreen, file, state string, edge int) (scene, func(), erro
 		}
 		v, _ := f.Track("vide")
 		st.Name = strings.TrimSuffix(filepath.Base(file), filepath.Ext(file))
+		st.Title = ""
 		st.Duration, st.Width, st.Height = seconds(f.Duration), v.Width, v.Height
 		in, out = st.Duration/5, st.Duration*3/4
 		fr, err := mac.OpenFrames(file)
@@ -333,7 +341,35 @@ func sampleTrim(o *offscreen, file, state string, edge int) (scene, func(), erro
 	case "error":
 		v.St.Error = "Couldn't save the trim: the disk is full"
 	}
-	release := func() {}
+	// The filmstrip, for the track as it's laid out.
+	var strip *sdl.GPUTexture
+	if state != "loading" {
+		var l draw.List
+		v.Draw(&ui.Ctx{Text: o.shaper, Pal: theme.Dark, Scale: scale, Now: time.Now()}, &l, w, h)
+		pw, ph := v.TrackPixels(scale)
+		aspect := st.Width / st.Height
+		tiles := make([]*image.RGBA, stripTiles)
+		if file != "" {
+			readStrip(file, st.Duration, stripEdge(scale, aspect), nil, func(k int, img *image.RGBA) { tiles[k] = img })
+		} else {
+			for k := range tiles {
+				tiles[k] = samplePixels(int(float64(ph)*aspect), ph, k/3)
+			}
+		}
+		img := thumb.Strip(tiles, int(float64(ph)*aspect+0.5), ph, pw)
+		var err error
+		if strip, err = gfx.UploadTexture(o.device, sdl.GPU_TEXTUREFORMAT_R8G8B8A8_UNORM, uint32(pw), uint32(ph), img.Pix); err != nil {
+			return nil, nil, err
+		}
+		o.renderer.SetImage(trimStrip, strip)
+		v.St.Strip = trimStrip
+	}
+	release := func() {
+		if strip != nil {
+			o.renderer.SetImage(trimStrip, nil)
+			o.device.ReleaseTexture(strip)
+		}
+	}
 	if state != "loading" {
 		var tex *sdl.GPUTexture
 		var err error
@@ -348,7 +384,8 @@ func sampleTrim(o *offscreen, file, state string, edge int) (scene, func(), erro
 			return nil, nil, err
 		}
 		v.St.Frame = trimImage
-		release = func() { o.renderer.SetImage(trimImage, nil); o.device.ReleaseTexture(tex) }
+		releaseStrip := release
+		release = func() { releaseStrip(); o.renderer.SetImage(trimImage, nil); o.device.ReleaseTexture(tex) }
 	}
 	return &trimScene{v: v}, release, nil
 }

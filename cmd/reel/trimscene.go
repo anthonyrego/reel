@@ -4,13 +4,18 @@ package main
 // the list. The picture at a handle comes from the recording through
 // AVAssetImageGenerator off the main thread, one at a time: while one is
 // being made, a newer request replaces any waiting one, so a drag shows
-// the newest place it can. Saving writes the copy off the main thread,
-// then copies it to the clipboard and goes back to the list.
+// the newest place it can. The filmstrip's pictures come from a second
+// generator on a goroutine of their own, so they never wait in front of
+// the handle's; the strip is made again from them when the track's width
+// changes. Saving writes the copy off the main thread, then copies it to
+// the clipboard and goes back to the list.
 
 import (
 	"image"
 	"log/slog"
+	"math"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -21,7 +26,9 @@ import (
 	"github.com/anthonyrego/reel/internal/library"
 	"github.com/anthonyrego/reel/internal/mac"
 	"github.com/anthonyrego/reel/internal/mp4"
+	"github.com/anthonyrego/reel/internal/thumb"
 	"github.com/anthonyrego/reel/internal/ui"
+	"github.com/anthonyrego/reel/internal/ui/home"
 	"github.com/anthonyrego/reel/internal/ui/trim"
 )
 
@@ -39,6 +46,15 @@ type trimScene struct {
 	tex    *sdl.GPUTexture
 	edge   int // the long edge to ask for, in pixels: the window's width
 
+	// The filmstrip: its pictures as they come, the texture made of them
+	// and the width it was made for, the picture's shape and the scale.
+	tiles    []*image.RGBA
+	strip    *sdl.GPUTexture
+	stripW   int
+	aspect   float64
+	scale    float32
+	stopTile chan struct{}
+
 	want     time.Duration // the picture asked for last
 	fetching bool          // one is being made
 	waiting  bool          // and another was asked for since
@@ -53,14 +69,28 @@ func openTrim(a *winApp, c *controller, path string) {
 		return
 	}
 	v, _ := f.Track("vide")
-	s := &trimScene{a: a, c: c, path: path, back: a.main.scene, edge: 1440}
+	s := &trimScene{a: a, c: c, path: path, back: a.main.scene, edge: 1440, scale: a.window.Scale(),
+		tiles: make([]*image.RGBA, stripTiles), aspect: 16.0 / 10, stopTile: make(chan struct{})}
+	if v.Width > 0 && v.Height > 0 {
+		s.aspect = v.Width / v.Height
+	}
+	name := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+	title := ""
+	for _, r := range c.recs {
+		if r.Path == path {
+			title = home.Title(home.Recording{Name: r.Name, When: r.When}, time.Now())
+		}
+	}
 	s.v = trim.New(trim.State{
-		Name:     strings.TrimSuffix(filepath.Base(path), filepath.Ext(path)),
+		Name: name, Title: title,
 		Duration: seconds(f.Duration),
 		Width:    v.Width, Height: v.Height,
 	})
 	s.v.Act = trim.Actions{Show: s.show, Copy: s.copy, Replace: s.replace, Cancel: s.close}
 	a.setScene(s)
+	go readStrip(path, s.v.St.Duration, stripEdge(s.scale, s.aspect), s.stopTile, func(k int, img *image.RGBA) {
+		c.post(func() { s.tile(k, img) })
+	})
 	go func() {
 		fr, err := mac.OpenFrames(path)
 		c.post(func() {
@@ -124,6 +154,35 @@ func (s *trimScene) got(img *image.RGBA, at time.Duration, err error) {
 	}
 }
 
+// tile takes one of the filmstrip's pictures. Main thread.
+func (s *trimScene) tile(k int, img *image.RGBA) {
+	if s.closed {
+		return
+	}
+	s.tiles[k] = img
+	s.makeStrip()
+}
+
+// makeStrip makes the filmstrip for the track as last drawn. Main thread.
+func (s *trimScene) makeStrip() {
+	pw, ph := s.v.TrackPixels(s.scale)
+	if pw <= 0 || ph <= 0 || s.closed {
+		return
+	}
+	img := thumb.Strip(s.tiles, max(1, int(float64(ph)*s.aspect+0.5)), ph, pw)
+	tex, err := gfx.UploadTexture(s.a.device, sdl.GPU_TEXTUREFORMAT_R8G8B8A8_UNORM, uint32(pw), uint32(ph), img.Pix)
+	if err != nil {
+		slog.Warn("trim: upload the filmstrip", "err", err)
+		return
+	}
+	s.a.renderer.SetImage(trimStrip, tex)
+	if s.strip != nil {
+		s.a.device.ReleaseTexture(s.strip)
+	}
+	s.strip, s.stripW = tex, pw
+	s.v.St.Strip = trimStrip
+}
+
 func (s *trimScene) copy(in, out time.Duration)    { s.save(in, out, false) }
 func (s *trimScene) replace(in, out time.Duration) { s.save(in, out, true) }
 
@@ -179,6 +238,7 @@ func (s *trimScene) close() {
 		return
 	}
 	s.closed = true
+	close(s.stopTile)
 	if fr := s.frames; fr != nil {
 		go fr.Close() // waits for a picture being made
 	}
@@ -186,6 +246,11 @@ func (s *trimScene) close() {
 	if s.tex != nil {
 		s.a.device.ReleaseTexture(s.tex)
 		s.tex = nil
+	}
+	s.a.renderer.SetImage(trimStrip, nil)
+	if s.strip != nil {
+		s.a.device.ReleaseTexture(s.strip)
+		s.strip = nil
 	}
 	setCursor(ui.CursorDefault)
 	s.a.setScene(s.back)
@@ -195,6 +260,49 @@ func (s *trimScene) close() {
 func (s *trimScene) draw(c *ui.Ctx, l *draw.List, w, h float32) {
 	s.edge = min(int(w*c.Scale), maxFrameEdge)
 	s.v.Draw(c, l, w, h)
+	if s.c == nil {
+		return // a render
+	}
+	if pw, _ := s.v.TrackPixels(c.Scale); (pw != s.stripW || c.Scale != s.scale) && slices.ContainsFunc(s.tiles, func(t *image.RGBA) bool { return t != nil }) {
+		// The track changed size: a strip for it, once this frame is out.
+		s.scale = c.Scale
+		s.stripW = pw
+		s.c.post(s.makeStrip)
+	}
+}
+
+// stripTiles is how many pictures a filmstrip is made of.
+const stripTiles = 16
+
+// stripEdge is the long edge to ask a filmstrip's pictures for: tall
+// enough for the track at scale.
+func stripEdge(scale float32, aspect float64) int {
+	return int(math.Ceil(float64(trim.TrackH*scale) * max(aspect, 1)))
+}
+
+// readStrip reads a filmstrip's pictures from the recording at path,
+// evenly spaced through d, handing each to got as it comes; a close of
+// stop ends it. Any goroutine.
+func readStrip(path string, d time.Duration, edge int, stop <-chan struct{}, got func(k int, img *image.RGBA)) {
+	fr, err := mac.OpenFrames(path)
+	if err != nil {
+		slog.Warn("trim: the filmstrip", "err", err)
+		return
+	}
+	defer fr.Close()
+	for k := range stripTiles {
+		select {
+		case <-stop:
+			return
+		default:
+		}
+		img, _, err := fr.At(d*time.Duration(2*k+1)/(2*stripTiles), edge)
+		if err != nil {
+			slog.Warn("trim: a filmstrip picture", "k", k, "err", err)
+			continue
+		}
+		got(k, img)
+	}
 }
 
 func (s *trimScene) event(c *ui.Ctx, ev ui.Event) bool {
