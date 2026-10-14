@@ -17,6 +17,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -59,8 +60,13 @@ func runSelftest(args []string) error {
 	interruptAt := fs.Duration("interrupt-at", 0, "end the recording this far in as if the stream had stopped by itself (0: never)")
 	minimize := fs.Bool("minimize", false, "with -hide-at: minimize the window instead of hiding it")
 	showAt := fs.Duration("show-at", 0, "with -hide-at: show the window again this far in (0: never)")
+	trimStart := fs.Duration("trim-from", 0, "with -trim-to: trim the recording from here, as the app does, and check the copy")
+	trimEnd := fs.Duration("trim-to", 0, "trim the recording to here (0: don't trim)")
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+	if *trimEnd > 0 && (*trimEnd <= *trimStart || *trimEnd > *dur || *pauseAt > 0) {
+		return errors.New("-trim-to must come after -trim-from, within -for, without -pause-at")
 	}
 	paths, err := config.Resolve()
 	if err != nil {
@@ -216,11 +222,23 @@ func runSelftest(args []string) error {
 		analyzePause(c, o.res, *pauseFor, beaconPeriod.Seconds(), 1/float64(*fps))
 		return c.result()
 	}
-	analyzeFile(c, o.res.Path, expect{
+	want := expect{
 		duration: o.res.Duration.Seconds(), frameDur: 1 / float64(*fps), period: beaconPeriod.Seconds(),
 		videoOnly: *videoOnly, refresh: refresh,
 		micAfter: micAfter,
-	})
+	}
+	analyzeFile(c, o.res.Path, want)
+	if *trimEnd > 0 {
+		trim := strings.TrimSuffix(o.res.Path, ".mp4") + "-trim.mp4"
+		start := time.Now()
+		if err := trimTo(o.res.Path, trim, *trimStart, *trimEnd); err != nil {
+			c.check(false, "trim", "%v", err)
+			return c.result()
+		}
+		fmt.Printf("trimmed %.3f to %.3f s into %s in %v\n", trimStart.Seconds(), trimEnd.Seconds(), trim,
+			time.Since(start).Round(time.Millisecond))
+		analyzeTrim(c, o.res.Path, trim, *trimStart, *trimEnd, want)
+	}
 	return c.result()
 }
 

@@ -185,28 +185,11 @@ func analyzeAudio(c *checks, path string, f mp4.File, flashes []float64, want ex
 		c.check(false, "decode audio", "%v", err)
 		return
 	}
-	clicks := avsync.AudioOnsets(pcm, 48000, 0.02, 0.1)
-	// A click near a flash is the beacon's (system audio); the rest are
-	// the fake mic's.
-	var system, mic []float64
-	for _, at := range clicks {
-		near := false
-		for _, v := range flashes {
-			if math.Abs(at-v) <= want.period/4 {
-				near = true
-				break
-			}
-		}
-		if near {
-			system = append(system, at)
-		} else {
-			mic = append(mic, at)
-		}
-	}
+	m := measureAV(pcm, flashes, want.period, want.micAfter)
 	// The beacon's own clicks: heard, and how late its speakers play them
 	// (a property of the test, not of the recording: noted, not judged).
-	sys := avsync.Summarize(avsync.Pair(flashes, system, want.period/4))
-	c.note("clicks", "%d heard: %d with a flash, %d between", len(clicks), len(system), len(mic))
+	sys := m.sys
+	c.note("clicks", "%d heard: %d with a flash, %d between", len(m.system)+len(m.mic), len(m.system), len(m.mic))
 	c.check(sys.N >= len(flashes)-2, "every flash heard", "%d of %d flashes have a click", sys.N, len(flashes))
 	if sys.N > 0 {
 		c.note("speaker latency", "the beacon's clicks come %+.0f ms after its flashes (p5 %+.0f, p95 %+.0f)",
@@ -215,17 +198,7 @@ func analyzeAudio(c *checks, path string, f mp4.File, flashes []float64, want ex
 	if want.micAfter <= 0 {
 		return
 	}
-
-	// The fake mic is stamped with the exact host time each click "was
-	// captured", micAfter past a flash's due time, so it measures the
-	// recording itself: a click against its flash (audio PTS vs video
-	// PTS), and against the system click before it (two audio sources).
-	shifted := make([]float64, len(flashes))
-	for i, v := range flashes {
-		shifted[i] = v + want.micAfter
-	}
-	av := avsync.Pair(shifted, mic, want.period/4)
-	o := avsync.Summarize(av)
+	o, av, mic, system := m.micAV, m.av, m.mic, m.system
 	c.check(o.N >= len(flashes)-3, "fake mic heard", "%d of %d", o.N, len(flashes))
 	if o.N == 0 {
 		return
@@ -247,20 +220,66 @@ func analyzeAudio(c *checks, path string, f mp4.File, flashes []float64, want ex
 	// Each mic click against the system click before it: both audio,
 	// sample-exact, so only placement moves it.
 	var gaps []float64
-	for _, m := range mic {
+	for _, at := range mic {
 		prev := math.Inf(-1)
 		for _, s := range system {
-			if s <= m && s > prev {
+			if s <= at && s > prev {
 				prev = s
 			}
 		}
 		if !math.IsInf(prev, -1) {
-			gaps = append(gaps, m-prev)
+			gaps = append(gaps, at-prev)
 		}
 	}
 	if d, ok := thirds(gaps); ok {
 		c.check(math.Abs(d) <= maxMicDrift, "mic drift", "%+.2f ms against the system clicks, first third to last", 1000*d)
 	}
+}
+
+// avMeasure is where a self-test recording's clicks fall against its
+// flashes.
+type avMeasure struct {
+	system, mic []float64 // click onsets: the beacon's (near a flash), the fake mic's
+	// sys is each system click − its flash. av is each mic click − its
+	// flash moved micAfter on (where it was made), summarized in micAV.
+	sys, micAV avsync.Summary
+	av         []float64
+}
+
+// measureAV finds the clicks in pcm (mono, 48 kHz) and pairs them with
+// the flashes: a click near a flash is the beacon's (system audio); the
+// rest are the fake mic's, micAfter past a flash's due time (0: no fake
+// mic).
+func measureAV(pcm []float32, flashes []float64, period, micAfter float64) avMeasure {
+	var m avMeasure
+	for _, at := range avsync.AudioOnsets(pcm, 48000, 0.02, 0.1) {
+		near := false
+		for _, v := range flashes {
+			if math.Abs(at-v) <= period/4 {
+				near = true
+				break
+			}
+		}
+		if near {
+			m.system = append(m.system, at)
+		} else {
+			m.mic = append(m.mic, at)
+		}
+	}
+	m.sys = avsync.Summarize(avsync.Pair(flashes, m.system, period/4))
+	if micAfter > 0 {
+		// The fake mic is stamped with the exact host time each click
+		// "was captured", micAfter past a flash's due time, so it
+		// measures the recording itself: a click against its flash
+		// (audio PTS vs video PTS).
+		shifted := make([]float64, len(flashes))
+		for i, v := range flashes {
+			shifted[i] = v + micAfter
+		}
+		m.av = avsync.Pair(shifted, m.mic, period/4)
+		m.micAV = avsync.Summarize(m.av)
+	}
+	return m
 }
 
 // thirds is the median of the last third of xs minus that of the first.
@@ -552,4 +571,115 @@ func frameTimes(path string) ([]string, error) {
 		ts = append(ts, strings.TrimSuffix(f, ","))
 	}
 	return ts, nil
+}
+
+// analyzeTrim checks a trim (from..to) of a self-test recording: it plays
+// to−from long, moov first, with the original's codecs and size; its
+// flashes are the original's from..to, each moved back by from, so the
+// cut is where it was asked for; and its clicks keep the offsets from
+// their flashes that the original's had there. Where the copy really
+// starts, the keyframe before the cut, is noted: it's what a player that
+// ignores edit lists shows first.
+func analyzeTrim(c *checks, orig, trim string, from, to time.Duration, want expect) {
+	f, err := mp4.ReadFile(trim)
+	if err != nil {
+		c.check(false, "trim structure", "%v", err)
+		return
+	}
+	c.check(f.FastStart(), "trim moov first", "%s", strings.Join(f.Top, " "))
+	length := (to - from).Seconds()
+	streams := []string{"v:0"}
+	if !want.videoOnly {
+		streams = append(streams, "a:0")
+	}
+	for _, s := range streams {
+		d, err := playedDuration(trim, s)
+		c.check(err == nil && math.Abs(d-length) <= maxTrimError, "trim length "+s,
+			"plays %.3f s (asked for %.3f s, ±%.3f) %v", d, length, maxTrimError, errOrEmpty(err))
+	}
+	vo, errO := probeVideo(orig)
+	vt, errT := probeVideo(trim)
+	c.check(errO == nil && errT == nil && vo == vt, "trim video format", "%+v (the original: %+v)", vt, vo)
+	if !want.videoOnly {
+		ao, errO := probeAudio(orig)
+		at, errT := probeAudio(trim)
+		c.check(errO == nil && errT == nil && ao == at, "trim audio format", "%+v (the original: %+v)", at, ao)
+	}
+	for _, t := range f.Tracks {
+		c.note("trim lead "+t.Handler, "the copy holds %.0f ms before the cut, which its edit list skips", 1000*t.Lead)
+	}
+	if raw, err := rawDuration(trim, "v:0"); err == nil {
+		played, _ := playedDuration(trim, "v:0")
+		c.note("ignoring edit lists", "the video plays %.3f s, %.0f ms more (ffprobe -ignore_editlist 1)", raw, 1000*(raw-played))
+	}
+
+	psO, err := luma(orig)
+	if err != nil {
+		c.check(false, "frames", "%v", err)
+		return
+	}
+	psT, err := luma(trim)
+	if err != nil {
+		c.check(false, "trim frames", "%v", err)
+		return
+	}
+	flashesO := avsync.Onsets(psO, avsync.Midway(psO), want.period/2)
+	flashesT := avsync.Onsets(psT, avsync.Midway(psT), want.period/2)
+	var inRange, moved []float64 // the original's flashes from..to, and moved back by from
+	for _, t := range flashesO {
+		if t >= from.Seconds() && t < to.Seconds() {
+			inRange = append(inRange, t)
+			moved = append(moved, t-from.Seconds())
+		}
+	}
+	cut := avsync.Summarize(avsync.Pair(moved, flashesT, want.period/4))
+	worst := math.Max(math.Abs(cut.Min), math.Abs(cut.Max))
+	c.check(len(moved) > 0 && cut.N >= len(moved)-1 && len(flashesT) <= len(moved)+1 && worst <= want.frameDur, "trim cut",
+		"%d flashes (the original has %d there), each within %.1f ms of where it was less %.3f s",
+		len(flashesT), len(moved), 1000*worst, from.Seconds())
+	if want.videoOnly {
+		return
+	}
+
+	pcmO, errO := pcmMono(orig, 48000)
+	pcmT, errT := pcmMono(trim, 48000)
+	if errO != nil || errT != nil {
+		c.check(false, "decode audio", "%v %v", errO, errT)
+		return
+	}
+	mO := measureAV(pcmO, inRange, want.period, want.micAfter)
+	mT := measureAV(pcmT, flashesT, want.period, want.micAfter)
+	c.check(mT.sys.N >= len(flashesT)-1 && math.Abs(mT.sys.Median-mO.sys.Median) <= maxTrimAV, "trim A/V kept",
+		"click − flash %+.1f ms (%d), the original there %+.1f ms (%d)", 1000*mT.sys.Median, mT.sys.N, 1000*mO.sys.Median, mO.sys.N)
+	if want.micAfter > 0 {
+		c.check(mT.micAV.N >= len(flashesT)-2 && math.Abs(mT.micAV.Median-mO.micAV.Median) <= maxTrimAV, "trim mic kept",
+			"mic click − flash %+.1f ms (%d), the original there %+.1f ms (%d)",
+			1000*mT.micAV.Median, mT.micAV.N, 1000*mO.micAV.Median, mO.micAV.N)
+	}
+}
+
+// Trim limits: how far a trim's length may be from what was asked for
+// (M6's gate), and how far its clicks may move against its flashes.
+const (
+	maxTrimError = 0.040
+	maxTrimAV    = 0.005
+)
+
+// rawDuration is how long a stream is with its edit list ignored: what a
+// player that doesn't read edit lists plays.
+func rawDuration(path, stream string) (float64, error) {
+	out, err := exec.Command("ffprobe", "-v", "error", "-ignore_editlist", "1", "-select_streams", stream,
+		"-show_entries", "stream=duration", "-of", "csv=p=0", path).Output()
+	if err != nil {
+		return 0, fmt.Errorf("ffprobe: %w", err)
+	}
+	return strconv.ParseFloat(strings.TrimSpace(string(out)), 64)
+}
+
+// errOrEmpty prints err, or nothing.
+func errOrEmpty(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
 }
