@@ -51,6 +51,7 @@ func runSelftest(args []string) error {
 	videoOnly := fs.Bool("video-only", false, "record no audio (M2)")
 	fakeMic := fs.Bool("fake-mic", true, "feed a fake 44.1 kHz microphone between the clicks")
 	micPPM := fs.Float64("mic-ppm", 800, "how fast the fake mic's clock runs, in ppm")
+	micDelay := fs.Duration("mic-delay", 0, "place the mic this much later, as for the camera (the A/V checks expect it)")
 	fragment := fs.Duration("fragment", 0, "write a movie fragment this often (0: the default, 5s; -1s: none)")
 	fps := fs.Int("fps", 30, "the most frames a second")
 	out := fs.String("out", "", "the MP4 to write (default: <recordings>/selftest-<time>.mp4)")
@@ -125,6 +126,7 @@ func runSelftest(args []string) error {
 		},
 		SystemAudio:  !*videoOnly,
 		OwnAudioOnly: true,
+		MicDelay:     *micDelay,
 		Path:         *out,
 		Fragment:     *fragment,
 	}
@@ -225,7 +227,7 @@ func runSelftest(args []string) error {
 	want := expect{
 		duration: o.res.Duration.Seconds(), frameDur: 1 / float64(*fps), period: beaconPeriod.Seconds(),
 		videoOnly: *videoOnly, refresh: refresh,
-		micAfter: micAfter,
+		micAfter: micAfter, micDelay: micDelay.Seconds(),
 	}
 	analyzeFile(c, o.res.Path, want)
 	if *trimEnd > 0 {

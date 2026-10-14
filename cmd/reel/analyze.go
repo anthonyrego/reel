@@ -53,6 +53,9 @@ type expect struct {
 	// micAfter is where a fake mic's clicks fall after each flash (0:
 	// no fake mic).
 	micAfter float64
+	// micDelay is how much later than its PTS the mic was placed
+	// (record.Config.MicDelay): the A/V checks take it off.
+	micDelay float64
 }
 
 // checks prints PASS/FAIL lines and remembers whether any failed.
@@ -206,9 +209,14 @@ func analyzeAudio(c *checks, path string, f mp4.File, flashes []float64, want ex
 	// A screen shows a frame a refresh or more after it's drawn, and the
 	// video's PTS is when it's shown, so the picture trails the click by
 	// that much (the same is true of a real mic and a real screen).
-	c.check(o.Median >= -maxSyncOffset && o.Median <= 0.010, "A/V sync",
-		"mic click − flash %+.1f ms from where they were made together (p5 %+.1f, p95 %+.1f)",
-		1000*o.Median, 1000*o.P5, 1000*o.P95)
+	delayed := ""
+	if want.micDelay != 0 {
+		delayed = fmt.Sprintf(", less the mic's %.0f ms delay", 1000*want.micDelay)
+	}
+	sync := o.Median - want.micDelay
+	c.check(sync >= -maxSyncOffset && sync <= 0.010, "A/V sync",
+		"mic click − flash %+.1f ms from where they were made together%s (p5 %+.1f, p95 %+.1f)",
+		1000*sync, delayed, 1000*(o.P5-want.micDelay), 1000*(o.P95-want.micDelay))
 	// A flash's onset is only seen at a captured frame: every 1/fps, or
 	// every refresh when the display is slower.
 	grain := math.Max(want.refresh, want.frameDur)

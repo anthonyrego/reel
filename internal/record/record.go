@@ -53,6 +53,12 @@ type Config struct {
 	// OwnAudioOnly hears only reel itself (self-tests): its sound comes
 	// through the same second stream a window recording uses.
 	OwnAudioOnly bool
+	// MicDelay places the mic this much later than its PTS (0 to
+	// MaxMicDelay): a camera's picture reaches the screen, and so the
+	// recording, later than the voice reaches the mic, and the voice
+	// should meet the face. It's the same for the whole recording: a
+	// change would make the mixer jump.
+	MicDelay time.Duration
 
 	Path string
 	// Bitrate is the video's average bits a second (0: area.VideoBitrate).
@@ -107,6 +113,13 @@ const (
 	stopTail = 200 * time.Millisecond
 	// maxPending bounds the mix waiting for the encoder: 3 s.
 	maxPending = 3 * mixer.Rate
+	// MaxMicDelay bounds Config.MicDelay.
+	MaxMicDelay = 500 * time.Millisecond
+	// heldFor is how far behind now a delayed mic buffer waits before it's
+	// placed: by then the timeline knows of the first frame and of any
+	// pause or resume up to its place, and the mix (written jitterWindow
+	// behind now) hasn't reached it.
+	heldFor = 50 * time.Millisecond
 )
 
 // audioRate and audioChannels are the track's format: the mixer's.
@@ -188,6 +201,7 @@ func Start(cfg Config) (*Recorder, error) {
 	if cfg.Video.FPS <= 0 {
 		cfg.Video.FPS = 30
 	}
+	cfg.MicDelay = max(0, min(cfg.MicDelay, MaxMicDelay))
 	fps := cfg.Video.FPS
 	bitrate := cfg.Bitrate
 	if bitrate <= 0 {
@@ -236,7 +250,7 @@ func Start(cfg Config) (*Recorder, error) {
 	}
 	slog.Info("record: started", "path", cfg.Path, "size", fmt.Sprintf("%d×%d", cfg.Video.Width, cfg.Video.Height),
 		"fps", fps, "bitrate", bitrate, "fragment", cfg.Fragment, "systemAudio", cfg.SystemAudio, "mic", cfg.Mic,
-		"secondStream", sound != nil)
+		"micDelay", cfg.MicDelay, "secondStream", sound != nil, "show", cfg.Video.Target.Show)
 	return r, nil
 }
 
@@ -319,7 +333,7 @@ func (r *Recorder) sound1(s mac.Sample, src mixer.Source, keep int) {
 	if !pts.Valid() {
 		return
 	}
-	c := chunk{src: src, pts: pts.Nanos()}
+	c := chunk{src: src, pts: r.place(src, pts.Nanos())}
 	err := s.PCM(func(f mac.ASBD, bufs [][]byte) {
 		c.rate = f.SampleRate
 		var err error
@@ -340,6 +354,15 @@ func (r *Recorder) sound1(s mac.Sample, src mixer.Source, keep int) {
 	default:
 		r.audioDrops.Add(int64(len(c.pcm[0])))
 	}
+}
+
+// place is where a source's buffer stamped pts goes: the mic MicDelay
+// later. Everything after (the stop, the timeline, the mix) sees this.
+func (r *Recorder) place(src mixer.Source, pts int64) int64 {
+	if src == mixer.Mic {
+		return pts + int64(r.cfg.MicDelay)
+	}
+	return pts
 }
 
 // streamStopped hears a stream end by itself (the menu bar's stop
@@ -463,7 +486,9 @@ func (r *Recorder) run() {
 			w.audio(c)
 		case <-t.C:
 			if r.cfg.audio() {
-				mac.WithPool(func() { w.emit(mac.HostTime().Nanos() - int64(jitterWindow)) })
+				now := mac.HostTime().Nanos()
+				w.unhold(now - int64(heldFor))
+				mac.WithPool(func() { w.emit(now - int64(jitterWindow)) })
 			}
 		case c := <-r.ctl:
 			switch c.kind {
@@ -495,6 +520,10 @@ type writing struct {
 	lastOut int64 // the recording time of the last frame written
 	wrote   bool
 	err     error
+
+	// held are delayed mic buffers placed later than now - heldFor: they
+	// wait for the timeline to know what happens up to their place.
+	held []chunk
 
 	// pending is mixed audio the encoder had no room for yet.
 	pending      []float32
@@ -542,11 +571,32 @@ func (w *writing) write(sbuf uintptr, out int64, dur mac.CMTime) {
 	}
 }
 
-// audio places a buffer in the mix by its PTS.
+// audio places a buffer in the mix by its PTS. A delayed mic's buffer
+// may be placed after now: it waits (see heldFor), or the timeline would
+// take it for one from before the first frame, or inside a pause that
+// will have ended by its place.
 func (w *writing) audio(c chunk) {
 	if at := w.r.stopAt.Load(); at > 0 && c.pts > at {
 		return
 	}
+	if w.r.cfg.MicDelay > 0 && c.src == mixer.Mic && (len(w.held) > 0 || c.pts > mac.HostTime().Nanos()-int64(heldFor)) {
+		w.held = append(w.held, c)
+		return
+	}
+	w.push(c)
+}
+
+// unhold places the held buffers up to upTo (host ns), in order.
+func (w *writing) unhold(upTo int64) {
+	n := 0
+	for n < len(w.held) && w.held[n].pts <= upTo {
+		w.push(w.held[n])
+		n++
+	}
+	w.held = append(w.held[:0], w.held[n:]...)
+}
+
+func (w *writing) push(c chunk) {
 	out, keep := w.tl.Map(c.pts)
 	if !keep {
 		return // before the first frame, or inside a pause
@@ -647,6 +697,10 @@ func (w *writing) stop(at int64) {
 			drained = true
 		}
 	}
+	if at >= 0 {
+		w.unhold(at)
+	}
+	w.held = nil
 	res := Result{Path: r.cfg.Path, Skipped: int(r.skipped.Load())}
 	if p := r.stopped.Load(); p != nil {
 		res.StoppedBy = *p
@@ -722,7 +776,7 @@ func (w *writing) stop(at int64) {
 	slog.Info("record: finished", "path", res.Path, "duration", res.Duration, "frames", res.Frames,
 		"dropped", res.Dropped, "skipped", res.Skipped, "audioFrames", res.AudioFrames, "audioLost", res.AudioLost,
 		"systemLag", w.mix.Lag(mixer.System), "systemBendPPM", w.mix.Bend(mixer.System)*1e6,
-		"micLag", w.mix.Lag(mixer.Mic), "micBendPPM", w.mix.Bend(mixer.Mic)*1e6,
+		"micLag", w.mix.Lag(mixer.Mic), "micBendPPM", w.mix.Bend(mixer.Mic)*1e6, "micDelay", r.cfg.MicDelay,
 		"jumps", w.mix.Reanchors)
 }
 
@@ -731,7 +785,7 @@ func (w *writing) stop(at int64) {
 // the same path (pts is host time, pcm planar). Any goroutine.
 func (r *Recorder) Feed(src mixer.Source, pts int64, rate float64, pcm [][]float32) {
 	select {
-	case r.audio <- chunk{src: src, pts: pts, rate: rate, pcm: pcm}:
+	case r.audio <- chunk{src: src, pts: r.place(src, pts), rate: rate, pcm: pcm}:
 	default:
 		r.audioDrops.Add(int64(len(pcm[0])))
 	}
