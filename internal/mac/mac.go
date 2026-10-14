@@ -74,8 +74,13 @@ var selectors = map[string][]string{
 
 	"+AVCaptureDeviceDiscoverySession": {"discoverySessionWithDeviceTypes:mediaType:position:"},
 	"AVCaptureDeviceDiscoverySession":  {"devices"},
-	"+AVCaptureDevice":                 {"defaultDeviceWithMediaType:", "authorizationStatusForMediaType:", "requestAccessForMediaType:completionHandler:"},
+	"+AVCaptureDevice":                 {"defaultDeviceWithMediaType:", "authorizationStatusForMediaType:", "requestAccessForMediaType:completionHandler:", "deviceWithUniqueID:"},
 	"AVCaptureDevice":                  {"uniqueID", "localizedName", "transportType", "isConnected"},
+	"+AVCaptureDeviceInput":            {"deviceInputWithDevice:error:"},
+	"AVCaptureSession": {"init", "beginConfiguration", "commitConfiguration", "canSetSessionPreset:", "setSessionPreset:",
+		"canAddInput:", "addInput:", "canAddOutput:", "addOutput:", "startRunning", "stopRunning", "isRunning"},
+	"AVCaptureVideoDataOutput": {"init", "availableVideoCVPixelFormatTypes", "setVideoSettings:", "setAlwaysDiscardsLateVideoFrames:",
+		"setSampleBufferDelegate:queue:"},
 
 	"+NSBundle":             {"mainBundle"},
 	"NSBundle":              {"bundleIdentifier", "objectForInfoDictionaryKey:"},
@@ -96,7 +101,8 @@ var selectors = map[string][]string{
 	"+NSWorkspace":          {"sharedWorkspace"},
 	"NSWorkspace":           {"notificationCenter"},
 	"+NSNotificationCenter": {"defaultCenter"},
-	"NSNotificationCenter":  {"addObserverForName:object:queue:usingBlock:"},
+	"NSNotificationCenter":  {"addObserverForName:object:queue:usingBlock:", "removeObserver:"},
+	"NSNotification":        {"object", "userInfo"},
 	"+NSPasteboard":         {"generalPasteboard"},
 	"NSPasteboard":          {"clearContents", "writeObjects:"},
 	"+NSFileManager":        {"defaultManager"},
@@ -117,7 +123,8 @@ var funcs = map[string][]string{
 		"CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer", "CMClockGetHostTimeClock", "CMClockGetTime",
 		"CMSampleBufferCreateCopyWithNewTiming", "CMAudioFormatDescriptionCreate", "CMBlockBufferCreateWithMemoryBlock",
 		"CMBlockBufferReplaceDataBytes", "CMAudioSampleBufferCreateReadyWithPacketDescriptions"},
-	coreVideoPath: {"CVPixelBufferGetWidth", "CVPixelBufferGetHeight", "CVPixelBufferGetPixelFormatType"},
+	coreVideoPath: {"CVPixelBufferGetWidth", "CVPixelBufferGetHeight", "CVPixelBufferGetPixelFormatType", "CVPixelBufferIsPlanar",
+		"CVPixelBufferGetBytesPerRow", "CVPixelBufferGetBaseAddress", "CVPixelBufferLockBaseAddress", "CVPixelBufferUnlockBaseAddress"},
 }
 
 // constants are the framework constants (extern NSString *const) the
@@ -126,6 +133,8 @@ var funcs = map[string][]string{
 var constants = map[string][]string{
 	avFoundationPath: {"AVMediaTypeAudio", "AVMediaTypeVideo", "AVCaptureDeviceTypeMicrophone", "AVFileTypeMPEG4", "AVAssetExportPresetPassthrough",
 		"AVCaptureDeviceTypeBuiltInWideAngleCamera", "AVCaptureDeviceTypeExternal", "AVCaptureDeviceTypeContinuityCamera",
+		"AVCaptureSessionPreset1280x720", "AVCaptureDeviceWasDisconnectedNotification", "AVCaptureSessionRuntimeErrorNotification",
+		"AVCaptureSessionErrorKey",
 		"AVVideoCodecKey", "AVVideoCodecTypeH264", "AVVideoWidthKey", "AVVideoHeightKey", "AVVideoCompressionPropertiesKey",
 		"AVVideoAverageBitRateKey", "AVVideoMaxKeyFrameIntervalDurationKey", "AVVideoAllowFrameReorderingKey",
 		"AVVideoProfileLevelKey", "AVVideoProfileLevelH264HighAutoLevel", "AVVideoExpectedSourceFrameRateKey",
@@ -135,11 +144,15 @@ var constants = map[string][]string{
 	avfAudioPath:         {"AVFormatIDKey", "AVSampleRateKey", "AVNumberOfChannelsKey", "AVEncoderBitRateKey"},
 	screenCaptureKitPath: {"SCStreamFrameInfoStatus"},
 	appKitPath:           {"NSApplicationDidBecomeActiveNotification", "NSApplicationDidResignActiveNotification"},
+	coreVideoPath:        {"kCVPixelBufferPixelFormatTypeKey"},
 }
 
-// protocols are the Objective-C protocols the stream output conforms to
-// (see protocol: reel registers them when no loaded binary has).
-var protocols = []string{"SCStreamOutput", "SCStreamDelegate"}
+// protocols are the Objective-C protocols reel's classes conform to, by
+// class (see protocol: reel registers them when no loaded binary has).
+var protocols = map[string][]string{
+	"ReelStreamOutput": {"SCStreamOutput", "SCStreamDelegate"},
+	"ReelCameraOutput": {"AVCaptureVideoDataOutputSampleBufferDelegate"},
+}
 
 type cgRect struct{ X, Y, W, H float64 }
 

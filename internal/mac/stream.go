@@ -101,6 +101,8 @@ var output struct {
 
 // The dispatch functions and constants (dispatch/queue.h).
 var dispatch struct {
+	once            sync.Once
+	err             error
 	attrAutorelease func(attr uintptr, frequency uint) uintptr
 	create          func(label *byte, attr uintptr) uintptr
 }
@@ -110,30 +112,42 @@ const dispatchAutoreleaseWorkItem = 1 // DISPATCH_AUTORELEASE_FREQUENCY_WORK_ITE
 // queueLabel lives as long as the process; libdispatch keeps a pointer.
 var queueLabel = []byte("com.anthonyrego.reel.capture\x00")
 
+// newQueue creates a serial dispatch queue that drains an autorelease pool
+// after every work item. label must live as long as the process.
+func newQueue(label []byte) (uintptr, error) {
+	dispatch.once.Do(func() {
+		for name, fn := range map[string]any{
+			"dispatch_queue_attr_make_with_autorelease_frequency": &dispatch.attrAutorelease,
+			"dispatch_queue_create":                               &dispatch.create,
+		} {
+			p, err := purego.Dlsym(purego.RTLD_DEFAULT, name)
+			if err != nil {
+				dispatch.err = err
+				return
+			}
+			purego.RegisterFunc(fn, p)
+		}
+	})
+	if dispatch.err != nil {
+		return 0, dispatch.err
+	}
+	q := dispatch.create(&label[0], dispatch.attrAutorelease(0, dispatchAutoreleaseWorkItem))
+	if q == 0 {
+		return 0, errors.New("no dispatch queue")
+	}
+	return q, nil
+}
+
 // loadOutput registers the output class and creates the samples' queue,
 // once.
 func loadOutput() error {
 	output.once.Do(func() {
-		p, err := purego.Dlsym(purego.RTLD_DEFAULT, "dispatch_queue_attr_make_with_autorelease_frequency")
-		if err != nil {
-			output.err = err
+		if output.queue, output.err = newQueue(queueLabel); output.err != nil {
 			return
 		}
-		purego.RegisterFunc(&dispatch.attrAutorelease, p)
-		if p, err = purego.Dlsym(purego.RTLD_DEFAULT, "dispatch_queue_create"); err != nil {
-			output.err = err
-			return
-		}
-		purego.RegisterFunc(&dispatch.create, p)
-		output.queue = dispatch.create(&queueLabel[0], dispatch.attrAutorelease(0, dispatchAutoreleaseWorkItem))
-		if output.queue == 0 {
-			output.err = errors.New("no dispatch queue")
-			return
-		}
-
 		protos := []*objc.Protocol{
-			protocol("SCStreamOutput", "stream:didOutputSampleBuffer:ofType:", "v@:@^vq"),
-			protocol("SCStreamDelegate", "stream:didStopWithError:", "v@:@@"),
+			protocol("SCStreamOutput", [2]string{"stream:didOutputSampleBuffer:ofType:", "v@:@^vq"}),
+			protocol("SCStreamDelegate", [2]string{"stream:didStopWithError:", "v@:@@"}),
 		}
 		output.class, output.err = objc.RegisterClass("ReelStreamOutput", objc.GetClass("NSObject"), protos, nil, []objc.MethodDef{
 			{Cmd: sel("stream:didOutputSampleBuffer:ofType:"), Fn: didOutput},
@@ -435,14 +449,15 @@ func streamConfiguration(cfg StreamConfig) (objc.ID, error) {
 	return c, nil
 }
 
-// protocol is the runtime's protocol of that name. ScreenCaptureKit
-// declares its protocols only in its headers: their runtime objects exist
-// once some loaded binary refers to one (a Swift app that conforms does),
-// so reel registers them itself when they're missing, with the one
-// optional method it implements. Nothing in ScreenCaptureKit can be
-// checking conformance against an object it never created; registering
-// them keeps conformsToProtocol: truthful for anyone who asks by name.
-func protocol(name, method, types string) *objc.Protocol {
+// protocol is the runtime's protocol of that name. ScreenCaptureKit (and
+// AVFoundation) declare their protocols only in their headers: their
+// runtime objects exist once some loaded binary refers to one (a Swift app
+// that conforms does), so reel registers them itself when they're missing,
+// with the optional methods it implements, each a selector and its type
+// encoding. Nothing in the frameworks can be checking conformance against
+// an object it never created; registering them keeps conformsToProtocol:
+// truthful for anyone who asks by name.
+func protocol(name string, methods ...[2]string) *objc.Protocol {
 	if p := objc.GetProtocol(name); p != nil {
 		return p
 	}
@@ -450,7 +465,9 @@ func protocol(name, method, types string) *objc.Protocol {
 	if p == nil { // registered meanwhile
 		return objc.GetProtocol(name)
 	}
-	p.AddMethodDescription(sel(method), types, false, true)
+	for _, m := range methods {
+		p.AddMethodDescription(sel(m[0]), m[1], false, true)
+	}
 	p.Register()
 	return p
 }

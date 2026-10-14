@@ -130,7 +130,14 @@ var cm struct {
 	clockTime          func(clock uintptr) CMTime
 	pixelWidth, height func(pb uintptr) uint
 	pixelFormat        func(pb uintptr) uint32
+	isPlanar           func(pb uintptr) bool
+	bytesPerRow        func(pb uintptr) uint
+	baseAddress        func(pb uintptr) unsafe.Pointer
+	lockBase, unlock   func(pb uintptr, flags uint64) int32
 }
+
+// kCVPixelBufferLock_ReadOnly.
+const pixelLockReadOnly = 1
 
 // loadCoreMedia resolves the CoreMedia and CoreVideo functions (inside
 // loadOnce).
@@ -162,6 +169,11 @@ func loadCoreMedia() error {
 		{&cm.pixelWidth, video, "CVPixelBufferGetWidth"},
 		{&cm.height, video, "CVPixelBufferGetHeight"},
 		{&cm.pixelFormat, video, "CVPixelBufferGetPixelFormatType"},
+		{&cm.isPlanar, video, "CVPixelBufferIsPlanar"},
+		{&cm.bytesPerRow, video, "CVPixelBufferGetBytesPerRow"},
+		{&cm.baseAddress, video, "CVPixelBufferGetBaseAddress"},
+		{&cm.lockBase, video, "CVPixelBufferLockBaseAddress"},
+		{&cm.unlock, video, "CVPixelBufferUnlockBaseAddress"},
 	} {
 		if _, err := purego.Dlsym(f.lib, f.name); err != nil {
 			return err
@@ -190,6 +202,9 @@ const (
 	KindScreen Kind = iota
 	KindAudio       // system audio
 	KindMic
+	// KindCamera is a camera frame (from StartCamera): never an
+	// SCStreamOutputType.
+	KindCamera
 )
 
 func (k Kind) String() string {
@@ -200,6 +215,8 @@ func (k Kind) String() string {
 		return "audio"
 	case KindMic:
 		return "mic"
+	case KindCamera:
+		return "camera"
 	}
 	return fmt.Sprintf("kind(%d)", int(k))
 }
@@ -279,6 +296,27 @@ func (s Sample) Image() (w, h int, format string, ok bool) {
 		return 0, 0, "", false
 	}
 	return int(cm.pixelWidth(pb)), int(cm.height(pb)), fourCC(cm.pixelFormat(pb)), true
+}
+
+// Pixels calls fn with a BGRA frame's pixels (a camera's), w×h, stride
+// bytes a row, valid only during fn; it reports false (and doesn't call
+// fn) for a frame with no pixels or in another format.
+func (s Sample) Pixels(fn func(pix []byte, w, h, stride int)) bool {
+	pb := cm.imageBuffer(s.buf)
+	if pb == 0 || cm.pixelFormat(pb) != pixelBGRA || cm.isPlanar(pb) {
+		return false
+	}
+	if cm.lockBase(pb, pixelLockReadOnly) != 0 {
+		return false
+	}
+	defer cm.unlock(pb, pixelLockReadOnly)
+	w, h, stride := int(cm.pixelWidth(pb)), int(cm.height(pb)), int(cm.bytesPerRow(pb))
+	base := cm.baseAddress(pb)
+	if base == nil || w <= 0 || h <= 0 || stride < w*4 {
+		return false
+	}
+	fn(unsafe.Slice((*byte)(base), (h-1)*stride+w*4), w, h, stride)
+	return true
 }
 
 // AudioFormat is an audio sample's format; ok is false for other samples.

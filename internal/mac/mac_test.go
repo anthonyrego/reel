@@ -59,15 +59,30 @@ func TestBridge(t *testing.T) {
 	if err := loadOutput(); err != nil {
 		t.Fatalf("output class: %v", err)
 	}
-	for _, name := range protocols {
-		p := objc.GetProtocol(name)
-		if p == nil || !objc.Send[bool](objc.ID(output.class), sel("conformsToProtocol:"), p) {
-			t.Errorf("the output class doesn't conform to %s", name)
+	if err := loadCamera(); err != nil {
+		t.Fatalf("camera class: %v", err)
+	}
+	for cls, names := range protocols {
+		c := objc.GetClass(cls)
+		if c == 0 {
+			t.Errorf("no class %s", cls)
+			continue
+		}
+		for _, name := range names {
+			p := objc.GetProtocol(name)
+			if p == nil || !objc.Send[bool](objc.ID(c), sel("conformsToProtocol:"), p) {
+				t.Errorf("%s doesn't conform to %s", cls, name)
+			}
 		}
 	}
-	for _, s := range []string{"stream:didOutputSampleBuffer:ofType:", "stream:didStopWithError:"} {
-		if !objc.Send[bool](objc.ID(output.class), sel("instancesRespondToSelector:"), sel(s)) {
-			t.Errorf("the output class doesn't respond to %s", s)
+	for cls, sels := range map[string][]string{
+		"ReelStreamOutput": {"stream:didOutputSampleBuffer:ofType:", "stream:didStopWithError:"},
+		"ReelCameraOutput": {"captureOutput:didOutputSampleBuffer:fromConnection:"},
+	} {
+		for _, s := range sels {
+			if !objc.Send[bool](objc.ID(objc.GetClass(cls)), sel("instancesRespondToSelector:"), sel(s)) {
+				t.Errorf("%s doesn't respond to %s", cls, s)
+			}
 		}
 	}
 }
@@ -180,5 +195,8 @@ func TestNotBundle(t *testing.T) {
 	}
 	if _, err := Cameras(); err != nil {
 		t.Fatal(err)
+	}
+	if _, err := StartCamera("any", func(Sample) { t.Error("a frame") }, nil); err != ErrNotBundle {
+		t.Fatalf("StartCamera = %v, want ErrNotBundle", err)
 	}
 }
