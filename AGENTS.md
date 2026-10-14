@@ -72,4 +72,4 @@ codesign -d -r- build/Reel.app   # must say certificate leaf
 Logs: `.dev/data/logs/<subcommand>.log`.
 
 ## Conventions
-- **Commits:** conventional style (`feat(mac): …`), one per logical step. Push only when the user says (no remote yet).
+- **Commits:** conventional style (`feat(mac): …`), one per logical step. Push only when the user says. The repo is public (github.com/anthonyrego/reel, MIT): keep personal details (names, emails, machines, certificates) out of files and commits; `SIGN` lives in the git-ignored `local.mk`.
