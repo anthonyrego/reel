@@ -183,7 +183,7 @@ func TestOnActive(t *testing.T) {
 	if err := OnActive(func(active bool) { heard = append(heard, active) }); err != nil {
 		t.Fatal(err)
 	}
-	_ = AppActive()
+	_, _ = AppActive(), OptionHeld()
 	withPool(func() {
 		center := class("NSNotificationCenter").Send(sel("defaultCenter"))
 		for _, name := range []string{"NSApplicationDidBecomeActiveNotification", "NSApplicationDidResignActiveNotification"} {

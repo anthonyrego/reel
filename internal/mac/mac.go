@@ -86,6 +86,7 @@ var selectors = map[string][]string{
 	"NSBundle":              {"bundleIdentifier", "objectForInfoDictionaryKey:"},
 	"+NSRunningApplication": {"currentApplication"},
 	"NSRunningApplication":  {"isActive"},
+	"+NSEvent":              {"modifierFlags"},
 
 	"+NSArray":              {"array", "arrayWithObject:", "arrayWithObjects:count:"},
 	"NSArray":               {"count", "objectAtIndex:"},

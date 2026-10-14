@@ -114,3 +114,15 @@ func AppActive() bool {
 	})
 	return active
 }
+
+// nsEventModifierFlagOption is NSEventModifierFlagOption, an enum value.
+const nsEventModifierFlagOption = 1 << 19
+
+// OptionHeld reports whether ⌥ is held now, whichever app is in front
+// (SDL's modifier state only follows the keys while reel is).
+func OptionHeld() bool {
+	if load() != nil {
+		return false
+	}
+	return objc.Send[uint](class("NSEvent"), sel("modifierFlags"))&nsEventModifierFlagOption != 0
+}
