@@ -164,7 +164,7 @@ func (h *Hits) Menu(c *ui.Ctx, l *draw.List, field draw.Rect, w, ht float32, cho
 		}
 		h.texts.PutFit(c, l, ch.Label, text.SansRegular, labelSize, row.X+28, ty, row.W-40, pal.Text)
 		if ch.Detail != "" && lay.Width+40 < row.W-40 {
-			h.texts.PutFit(c, l, ch.Detail, text.SansRegular, 12, row.X+28+lay.Width+10, ty+1, row.W-lay.Width-78, pal.TextMuted)
+			h.texts.PutFit(c, l, ch.Detail, text.SansRegular, 12, row.X+28+lay.Width+10, ty+1, row.W-lay.Width-50, pal.TextMuted)
 		}
 	}
 }
