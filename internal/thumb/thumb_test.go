@@ -1,6 +1,7 @@
 package thumb
 
 import (
+	"fmt"
 	"image"
 	"image/color"
 	"testing"
@@ -100,5 +101,109 @@ func TestStrip(t *testing.T) {
 	}
 	if c := s.RGBAAt(25, 15); !near(c, red) {
 		t.Errorf("the tile before a missing one: %v", c)
+	}
+}
+
+// frame is a w×h BGRA camera frame, stride bytes a row (the padding
+// filled with junk), colored by at(x, y).
+func frame(w, h, stride int, at func(x, y int) color.RGBA) []byte {
+	pix := make([]byte, (h-1)*stride+w*4)
+	for i := range pix {
+		pix[i] = 0x5a
+	}
+	for y := range h {
+		for x := range w {
+			c := at(x, y)
+			o := y*stride + x*4
+			pix[o], pix[o+1], pix[o+2], pix[o+3] = c.B, c.G, c.R, c.A
+		}
+	}
+	return pix
+}
+
+// A flat color comes out exactly, through each path: copied, halved once
+// and twice, enlarged, and with row padding.
+func TestBubbleFlat(t *testing.T) {
+	c := color.RGBA{0x12, 0x9c, 0xe7, 0xff}
+	for _, tc := range []struct{ w, h, stride, d int }{
+		{720, 720, 720 * 4, 720},
+		{1280, 720, 1280 * 4, 360},
+		{1280, 720, 1280*4 + 64, 180},
+		{640, 480, 640 * 4, 600},
+		{1280, 720, 1280 * 4, 400},
+	} {
+		var b Bubble
+		dst := image.NewRGBA(image.Rect(0, 0, tc.d, tc.d))
+		b.Cut(dst, frame(tc.w, tc.h, tc.stride, func(int, int) color.RGBA { return c }), tc.w, tc.h, tc.stride)
+		for y := range tc.d {
+			for x := range tc.d {
+				if got := dst.RGBAAt(x, y); got != c {
+					t.Fatalf("%dx%d (stride %d) to %d: (%d,%d) is %v, want %v", tc.w, tc.h, tc.stride, tc.d, x, y, got, c)
+				}
+			}
+		}
+	}
+}
+
+// Only the middle square is kept, whichever way the frame is long, and
+// it's mirrored: what's on the frame's left is on the bubble's right.
+func TestBubbleMirroredMiddle(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		w, h int
+	}{{"landscape", 1280, 720}, {"portrait", 720, 1280}, {"square", 720, 720}} {
+		s := min(tc.w, tc.h)
+		ox, oy := (tc.w-s)/2, (tc.h-s)/2
+		// Outside the square: green. Inside: red on its left third, blue
+		// on the rest.
+		pix := frame(tc.w, tc.h, tc.w*4, func(x, y int) color.RGBA {
+			switch {
+			case x < ox || x >= ox+s || y < oy || y >= oy+s:
+				return color.RGBA{0, 0xff, 0, 0xff}
+			case x-ox < s/3:
+				return red
+			}
+			return blue
+		})
+		for _, d := range []int{180, 360, 500} {
+			var b Bubble
+			dst := image.NewRGBA(image.Rect(0, 0, d, d))
+			b.Cut(dst, pix, tc.w, tc.h, tc.w*4)
+			for _, p := range []struct {
+				x, y int
+				want color.RGBA
+			}{
+				{d - 1, d / 2, red}, {d - d/6, 0, red}, {d - d/6, d - 1, red}, // the frame's left, mirrored
+				{0, d / 2, blue}, {d / 3, 0, blue}, {d / 2, d - 1, blue},
+			} {
+				if got := dst.RGBAAt(p.x, p.y); !near(got, p.want) {
+					t.Errorf("%s to %d: (%d,%d) is %v, want %v", tc.name, d, p.x, p.y, got, p.want)
+				}
+			}
+		}
+	}
+}
+
+// A short or empty frame leaves dst alone rather than read past it.
+func TestBubbleShortFrame(t *testing.T) {
+	var b Bubble
+	dst := solid(64, 64, red)
+	b.Cut(dst, make([]byte, 100), 1280, 720, 1280*4)
+	b.Cut(dst, nil, 0, 0, 0)
+	if dst.RGBAAt(10, 10) != red {
+		t.Fatal("a short frame drew")
+	}
+}
+
+func BenchmarkBubble(b *testing.B) {
+	pix := frame(1280, 720, 1280*4, func(x, y int) color.RGBA { return color.RGBA{uint8(x), uint8(y), uint8(x ^ y), 0xff} })
+	for _, d := range []int{360, 400, 640, 720} {
+		b.Run(fmt.Sprint(d), func(b *testing.B) {
+			var bb Bubble
+			dst := image.NewRGBA(image.Rect(0, 0, d, d))
+			for b.Loop() {
+				bb.Cut(dst, pix, 1280, 720, 1280*4)
+			}
+		})
 	}
 }
