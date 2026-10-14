@@ -1,12 +1,14 @@
 # Reel
 
-A screen recorder for macOS that mixes what your Mac plays with your microphone into **one** audio track, then puts the MP4 on your clipboard, ready to paste into Slack.
+macOS screen recorder software for the things that are easier to show than to type.
 
-- Record a whole display, one window, or an area you drag out.
-- System audio and a mic, mixed: talk over a demo, a video or a call. Each source is placed by its own timestamps, with its clock drift corrected, so they stay in sync.
-- Pause and resume: the pause is cut out, and the picture after it is the one on screen when you resume.
-- ⌃⌥R starts and stops from any app; a small floating control shows the time, pause and stop while recording.
-- H.264 and AAC in a fast-start MP4, written in five-second fragments, so a crash loses seconds, not the recording.
+Pick a display, a window or a part of the screen, press ⌃⌥R and talk. Reel records the screen, what your Mac is playing and what you're saying, all in sync, and when you stop, the video is already on your clipboard: paste it into Slack, an email or a pull request. No account, no upload, no editor to get through first.
+
+- **Your voice and your Mac's sound, together.** Talk over a video, a demo with sound or a call. Both end up in the recording, in sync from the first second to the last.
+- **Any part of the screen.** A whole display, one window, or an area you drag out.
+- **Pause when you need to.** The pause is cut out cleanly, and the recording picks up with what's on screen when you resume.
+- **Out of the way.** A small floating control shows the time, pause and stop. ⌃⌥R works from any app, and Reel's own windows never show up in a recording.
+- **An MP4 that plays anywhere,** written as it records, so a crash costs seconds, not the recording.
 
 **Status:** early. The recording pipeline is done and tested (milestones M0–M4); the app (M5) is being tried out; trimming (M6) is next. The design and milestones are in [docs/plan.md](docs/plan.md).
 
@@ -38,7 +40,7 @@ Go throughout, with no cgo. Reel draws its own interface with SDL3's GPU API ([g
 
 - One `SCStream` records the screen, system audio and the microphone (two for a window: a window's stream only hears its own app).
 - A pure-Go mixer places each audio source on a 48 kHz timeline by its timestamps, through a resampler whose rate is bent slightly to absorb clock drift, and sums them through a soft limiter.
-- `AVAssetWriter` encodes H.264 and AAC; the index is moved to the front of the file at the end.
+- `AVAssetWriter` encodes H.264 and AAC in five-second fragments, so a crash loses at most the last few seconds; at the end the index moves to the front of the file, so it starts playing before it has fully downloaded.
 - `reel selftest` records the app's own flashing, clicking window (plus a fake microphone) and checks the file: structure, codec, duration, and audio/video sync.
 
 [AGENTS.md](AGENTS.md) describes the packages and the rules for working on them.
