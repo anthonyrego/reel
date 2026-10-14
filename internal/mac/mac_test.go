@@ -159,3 +159,26 @@ func TestOnSleepRegisters(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// TestOnActiveRegisters: the observers register without an exception, and
+// a test binary (no window, run from a terminal) isn't the active app.
+func TestOnActiveRegisters(t *testing.T) {
+	if err := OnActive(func(bool) {}); err != nil {
+		t.Fatal(err)
+	}
+	_ = AppActive()
+}
+
+// TestNotBundle: a test binary isn't Reel.app, so it lists no iPhones and
+// can't ask for the camera (nor open one).
+func TestNotBundle(t *testing.T) {
+	if InBundle() {
+		t.Fatal("a test binary reads as Reel.app")
+	}
+	if err := RequestCameraAccess(func(bool) { t.Error("asked") }); err != ErrNotBundle {
+		t.Fatalf("RequestCameraAccess = %v, want ErrNotBundle", err)
+	}
+	if _, err := Cameras(); err != nil {
+		t.Fatal(err)
+	}
+}

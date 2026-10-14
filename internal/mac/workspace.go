@@ -65,3 +65,52 @@ func watchSleep() error {
 	})
 	return err
 }
+
+var activeWatch struct {
+	once sync.Once
+	fns  []func(active bool)
+	mu   sync.Mutex
+}
+
+// OnActive calls fn when reel becomes the active app (true: the user
+// switched to it) and when another app does (false), from NSApplication's
+// notifications on the main thread's run loop, so only an app gets them.
+// AppActive is the state now.
+func OnActive(fn func(active bool)) error {
+	if err := load(); err != nil {
+		return err
+	}
+	activeWatch.mu.Lock()
+	activeWatch.fns = append(activeWatch.fns, fn)
+	activeWatch.mu.Unlock()
+	activeWatch.once.Do(func() {
+		withPool(func() {
+			center := class("NSNotificationCenter").Send(sel("defaultCenter"))
+			for name, active := range map[string]bool{"NSApplicationDidBecomeActiveNotification": true, "NSApplicationDidResignActiveNotification": false} {
+				// The block lives as long as the process: never released.
+				block := objc.NewBlock(func(_ objc.Block, _ objc.ID) {
+					activeWatch.mu.Lock()
+					fns := append([]func(bool){}, activeWatch.fns...)
+					activeWatch.mu.Unlock()
+					for _, fn := range fns {
+						fn(active)
+					}
+				})
+				center.Send(sel("addObserverForName:object:queue:usingBlock:"), constant(name), objc.ID(0), objc.ID(0), block).Send(sel("retain"))
+			}
+		})
+	})
+	return nil
+}
+
+// AppActive reports whether reel is the active app (the one in front).
+func AppActive() bool {
+	if load() != nil {
+		return false
+	}
+	var active bool
+	withPool(func() {
+		active = objc.Send[bool](class("NSRunningApplication").Send(sel("currentApplication")), sel("isActive"))
+	})
+	return active
+}

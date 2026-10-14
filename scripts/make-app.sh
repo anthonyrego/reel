@@ -55,6 +55,8 @@ cat > "$app/Contents/Info.plist" <<PLIST
 	<key>NSHighResolutionCapable</key><true/>
 	<key>NSSupportsAutomaticGraphicsSwitching</key><true/>
 	<key>NSMicrophoneUsageDescription</key><string>Reel records your microphone so you can talk over a recording.</string>
+	<key>NSCameraUsageDescription</key><string>Reel shows your camera in a bubble on screen, so you're in what you record.</string>
+	<key>NSCameraUseContinuityCameraDeviceType</key><true/>
 </dict>
 </plist>
 PLIST

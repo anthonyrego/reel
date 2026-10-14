@@ -49,13 +49,17 @@ const (
 )
 
 // MicAccess reports the Microphone permission without asking.
-func MicAccess() Permission {
+func MicAccess() Permission { return access("AVMediaTypeAudio") }
+
+// access reports the permission for a capture device's media type
+// without asking.
+func access(media string) Permission {
 	if load() != nil {
 		return PermissionDenied
 	}
 	var st int
 	withPool(func() {
-		st = objc.Send[int](class("AVCaptureDevice"), sel("authorizationStatusForMediaType:"), constant("AVMediaTypeAudio"))
+		st = objc.Send[int](class("AVCaptureDevice"), sel("authorizationStatusForMediaType:"), constant(media))
 	})
 	switch st {
 	case avAuthorized:
@@ -156,7 +160,12 @@ func Mics() ([]Mic, error) {
 // prompt the first time and answers from the stored choice after that.
 // done is called with the answer on an AVFoundation queue. It opens no
 // device.
-func RequestMicAccess(done func(granted bool)) error {
+func RequestMicAccess(done func(granted bool)) error { return requestAccess("AVMediaTypeAudio", done) }
+
+// requestAccess asks for the permission for a capture device's media type
+// (macOS prompts only the first time); done gets the answer on an
+// AVFoundation queue.
+func requestAccess(media string, done func(granted bool)) error {
 	if err := load(); err != nil {
 		return err
 	}
@@ -166,7 +175,7 @@ func RequestMicAccess(done func(granted bool)) error {
 		block.Release()
 	})
 	withPool(func() {
-		class("AVCaptureDevice").Send(sel("requestAccessForMediaType:completionHandler:"), constant("AVMediaTypeAudio"), block)
+		class("AVCaptureDevice").Send(sel("requestAccessForMediaType:completionHandler:"), constant(media), block)
 	})
 	return nil
 }
