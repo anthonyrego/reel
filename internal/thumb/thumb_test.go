@@ -1,6 +1,7 @@
 package thumb
 
 import (
+	"bytes"
 	"fmt"
 	"image"
 	"image/color"
@@ -134,7 +135,7 @@ func TestBubbleFlat(t *testing.T) {
 	} {
 		var b Bubble
 		dst := image.NewRGBA(image.Rect(0, 0, tc.d, tc.d))
-		b.Cut(dst, frame(tc.w, tc.h, tc.stride, func(int, int) color.RGBA { return c }), tc.w, tc.h, tc.stride)
+		b.Cut(dst, frame(tc.w, tc.h, tc.stride, func(int, int) color.RGBA { return c }), tc.w, tc.h, tc.stride, Crop{})
 		for y := range tc.d {
 			for x := range tc.d {
 				if got := dst.RGBAAt(x, y); got != c {
@@ -168,7 +169,7 @@ func TestBubbleMirroredMiddle(t *testing.T) {
 		for _, d := range []int{180, 360, 500} {
 			var b Bubble
 			dst := image.NewRGBA(image.Rect(0, 0, d, d))
-			b.Cut(dst, pix, tc.w, tc.h, tc.w*4)
+			b.Cut(dst, pix, tc.w, tc.h, tc.w*4, Crop{})
 			for _, p := range []struct {
 				x, y int
 				want color.RGBA
@@ -188,22 +189,127 @@ func TestBubbleMirroredMiddle(t *testing.T) {
 func TestBubbleShortFrame(t *testing.T) {
 	var b Bubble
 	dst := solid(64, 64, red)
-	b.Cut(dst, make([]byte, 100), 1280, 720, 1280*4)
-	b.Cut(dst, nil, 0, 0, 0)
+	b.Cut(dst, make([]byte, 100), 1280, 720, 1280*4, Crop{})
+	b.Cut(dst, nil, 0, 0, 0, Crop{})
 	if dst.RGBAAt(10, 10) != red {
 		t.Fatal("a short frame drew")
 	}
 }
 
+// Zoomed in, the square shrinks about the middle: a red square half the
+// middle square's side fills the bubble at zoom 2, and only its middle
+// at zoom 1.
+func TestBubbleZoom(t *testing.T) {
+	const w, h, d = 1280, 720, 300
+	pix := frame(w, h, w*4, func(x, y int) color.RGBA {
+		if x >= w/2-h/4 && x < w/2+h/4 && y >= h/4 && y < h*3/4 {
+			return red
+		}
+		return blue
+	})
+	var b Bubble
+	dst := image.NewRGBA(image.Rect(0, 0, d, d))
+	b.Cut(dst, pix, w, h, w*4, Crop{Zoom: 2})
+	for _, p := range [][2]int{{2, 2}, {d - 3, 2}, {d / 2, d / 2}, {2, d - 3}, {d - 3, d - 3}} {
+		if got := dst.RGBAAt(p[0], p[1]); !near(got, red) {
+			t.Errorf("zoom 2: (%d,%d) is %v, want red", p[0], p[1], got)
+		}
+	}
+	b.Cut(dst, pix, w, h, w*4, Crop{Zoom: 1})
+	if got := dst.RGBAAt(d/2, d/2); !near(got, red) {
+		t.Errorf("zoom 1: the middle is %v, want red", got)
+	}
+	if got := dst.RGBAAt(2, 2); !near(got, blue) {
+		t.Errorf("zoom 1: the corner is %v, want blue", got)
+	}
+}
+
+// A Crop's X is in the picture as seen: toward the bubble's right, which
+// is the frame's left. Its Y pans a portrait frame.
+func TestBubblePan(t *testing.T) {
+	const d = 200
+	var b Bubble
+	dst := image.NewRGBA(image.Rect(0, 0, d, d))
+	// The frame's left half red, its right half blue: seen mirrored, red
+	// is on the right.
+	land := frame(1280, 720, 1280*4, func(x, _ int) color.RGBA {
+		if x < 640 {
+			return red
+		}
+		return blue
+	})
+	for _, tc := range []struct {
+		x         float64
+		mid, edge color.RGBA // the bubble's middle; its right edge
+	}{{0.2, red, red}, {-0.2, blue, red}} {
+		b.Cut(dst, land, 1280, 720, 1280*4, Crop{X: tc.x})
+		if got := dst.RGBAAt(d/2, d/2); !near(got, tc.mid) {
+			t.Errorf("X %v: the middle is %v, want %v", tc.x, got, tc.mid)
+		}
+		if got := dst.RGBAAt(d-1, d/2); !near(got, tc.edge) {
+			t.Errorf("X %v: the right edge is %v, want %v", tc.x, got, tc.edge)
+		}
+	}
+	// A portrait frame's top half red: a positive Y looks lower.
+	port := frame(720, 1280, 720*4, func(_, y int) color.RGBA {
+		if y < 640 {
+			return red
+		}
+		return blue
+	})
+	for _, tc := range []struct {
+		y   float64
+		mid color.RGBA
+	}{{0.2, blue}, {-0.2, red}} {
+		b.Cut(dst, port, 720, 1280, 720*4, Crop{Y: tc.y})
+		if got := dst.RGBAAt(d/2, d/2); !near(got, tc.mid) {
+			t.Errorf("portrait Y %v: the middle is %v, want %v", tc.y, got, tc.mid)
+		}
+	}
+}
+
+// A Crop past an edge, or zoomed past either end, is clamped, and the cut
+// agrees with the clamped one.
+func TestCropClamp(t *testing.T) {
+	for _, tc := range []struct {
+		c, want Crop
+	}{
+		{Crop{}, Crop{Zoom: 1}},
+		{Crop{Zoom: 10}, Crop{Zoom: MaxZoom}},
+		{Crop{Zoom: 1, X: 5, Y: 1}, Crop{Zoom: 1, X: (1 - 720.0/1280) / 2, Y: 0}},
+		{Crop{Zoom: 2, X: -1, Y: -1}, Crop{Zoom: 2, X: -(1 - 360.0/1280) / 2, Y: -0.25}},
+	} {
+		if got := tc.c.Clamp(1280, 720); got != tc.want {
+			t.Errorf("%+v: %+v, want %+v", tc.c, got, tc.want)
+		}
+	}
+	pix := frame(1280, 720, 1280*4, func(x, y int) color.RGBA { return color.RGBA{uint8(x), uint8(y), uint8(x ^ y), 0xff} })
+	var b Bubble
+	far, clamped := image.NewRGBA(image.Rect(0, 0, 150, 150)), image.NewRGBA(image.Rect(0, 0, 150, 150))
+	c := Crop{Zoom: 2.5, X: 3, Y: -3}
+	b.Cut(far, pix, 1280, 720, 1280*4, c)
+	b.Cut(clamped, pix, 1280, 720, 1280*4, c.Clamp(1280, 720))
+	if !bytes.Equal(far.Pix, clamped.Pix) {
+		t.Error("a crop past the edge cut differently from its clamped self")
+	}
+	// Panned all the way to the seen right, the square is the frame's
+	// left edge.
+	if s, x0, y0 := (Crop{Zoom: 2, X: 1, Y: 1}).square(1280, 720); s != 360 || x0 != 0 || y0 != 360 {
+		t.Errorf("the far corner: side %d at (%d,%d), want 360 at (0,360)", s, x0, y0)
+	}
+}
+
 func BenchmarkBubble(b *testing.B) {
 	pix := frame(1280, 720, 1280*4, func(x, y int) color.RGBA { return color.RGBA{uint8(x), uint8(y), uint8(x ^ y), 0xff} })
-	for _, d := range []int{360, 400, 640, 720} {
-		b.Run(fmt.Sprint(d), func(b *testing.B) {
-			var bb Bubble
-			dst := image.NewRGBA(image.Rect(0, 0, d, d))
-			for b.Loop() {
-				bb.Cut(dst, pix, 1280, 720, 1280*4)
-			}
-		})
+	for _, zoom := range []float64{1, 2} {
+		for _, d := range []int{360, 400, 640, 720} {
+			b.Run(fmt.Sprintf("zoom%v/%d", zoom, d), func(b *testing.B) {
+				var bb Bubble
+				dst := image.NewRGBA(image.Rect(0, 0, d, d))
+				for b.Loop() {
+					bb.Cut(dst, pix, 1280, 720, 1280*4, Crop{Zoom: zoom})
+				}
+			})
+		}
 	}
 }

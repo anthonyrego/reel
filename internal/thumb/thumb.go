@@ -6,6 +6,7 @@ package thumb
 
 import (
 	"image"
+	"math"
 
 	xdraw "golang.org/x/image/draw"
 )
@@ -61,10 +62,47 @@ func Strip(tiles []*image.RGBA, tileW, tileH, width int) *image.RGBA {
 	return dst
 }
 
-// Bubble cuts camera frames to the camera bubble: the middle square of
-// each, mirrored (people expect to see themselves as in a mirror) and
-// scaled to the bubble's pixels. It keeps its buffers from frame to frame:
-// one per camera, used by one goroutine at a time.
+// MaxZoom is how far a Crop zooms in: at 720p, onto a 240-pixel square.
+const MaxZoom = 3
+
+// Crop is the part of a camera frame the bubble shows: a square Zoom
+// times smaller than the frame's middle square (0 or 1: that square),
+// whose middle is X frame widths right and Y frame heights down of the
+// frame's middle, in the picture as seen: mirrored, so a positive X is
+// toward the frame's left. The zero Crop is the middle square.
+type Crop struct {
+	Zoom, X, Y float64
+}
+
+// Clamp is c with its zoom from 1 to MaxZoom and its square inside a w×h
+// frame.
+func (c Crop) Clamp(w, h int) Crop {
+	c.Zoom = min(max(c.Zoom, 1), MaxZoom)
+	if w <= 0 || h <= 0 {
+		return c
+	}
+	s := float64(min(w, h)) / c.Zoom
+	// How far the middle may go either way.
+	rx, ry := (1-s/float64(w))/2, (1-s/float64(h))/2
+	c.X = min(max(c.X, -rx), rx)
+	c.Y = min(max(c.Y, -ry), ry)
+	return c
+}
+
+// square is c's square in a w×h frame: its side and top-left corner, in
+// the frame's pixels.
+func (c Crop) square(w, h int) (s, x0, y0 int) {
+	c = c.Clamp(w, h)
+	s = min(max(int(math.Round(float64(min(w, h))/c.Zoom)), 2), min(w, h))
+	x0 = min(max((w-s)/2-int(math.Round(c.X*float64(w))), 0), w-s)
+	y0 = min(max((h-s)/2+int(math.Round(c.Y*float64(h))), 0), h-s)
+	return s, x0, y0
+}
+
+// Bubble cuts camera frames to the camera bubble: a square of each (the
+// middle one, or a Crop's), mirrored (people expect to see themselves as
+// in a mirror) and scaled to the bubble's pixels. It keeps its buffers
+// from frame to frame: one per camera, used by one goroutine at a time.
 type Bubble struct {
 	half   []byte  // the square halved while it's twice the bubble or more, BGRA
 	cols   []int32 // per bubble column, mirrored: the left tap's byte offset
@@ -74,18 +112,18 @@ type Bubble struct {
 	scaled [2]int  // the square and bubble sizes cols and rows are for
 }
 
-// Cut fills dst (square) with the middle square of pix, a w×h BGRA frame
-// stride bytes a row, mirrored and scaled to dst. Shrinking halves the
-// square 2×2 at a time while it's twice dst or more, then interpolates
+// Cut fills dst (square) with c's square of pix, a w×h BGRA frame stride
+// bytes a row, mirrored and scaled to dst. Shrinking halves the square
+// 2×2 at a time while it's twice dst or more, then interpolates
 // bilinearly, so it neither aliases nor costs a filter's taps: a camera
 // sends 30 frames a second. A flat color comes out exactly.
-func (b *Bubble) Cut(dst *image.RGBA, pix []byte, w, h, stride int) {
+func (b *Bubble) Cut(dst *image.RGBA, pix []byte, w, h, stride int, c Crop) {
 	d := dst.Bounds().Dx()
-	s := min(w, h)
-	if d <= 0 || s < 2 || stride < w*4 || len(pix) < (h-1)*stride+w*4 {
+	if d <= 0 || min(w, h) < 2 || stride < w*4 || len(pix) < (h-1)*stride+w*4 {
 		return
 	}
-	src, sstride := pix[(h-s)/2*stride+(w-s)/2*4:], stride
+	s, x0, y0 := c.square(w, h)
+	src, sstride := pix[y0*stride+x0*4:], stride
 	for halved := false; s >= 2*d && s >= 2; halved = true {
 		n := s / 2
 		if !halved && cap(b.half) < n*n*4 {

@@ -202,7 +202,7 @@ func (f *camFeed) frame(id string, pix []byte, w, h, stride int, pts, arrived in
 	if f.back == nil || f.back.Rect.Dx() != d {
 		f.back = image.NewRGBA(image.Rect(0, 0, d, d))
 	}
-	f.cut.Cut(f.back, pix, w, h, stride)
+	f.cut.Cut(f.back, pix, w, h, stride, thumb.Crop{})
 	f.mu.Lock()
 	if f.id != id || f.state == camFailed {
 		f.mu.Unlock()

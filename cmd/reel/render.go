@@ -429,7 +429,7 @@ func sampleCamera(o *offscreen, side int) (*sdl.GPUTexture, error) {
 	fakePicture(pix, 40, false)
 	img := image.NewRGBA(image.Rect(0, 0, side, side))
 	var cut thumb.Bubble
-	cut.Cut(img, pix, fakeCamW, fakeCamH, fakeCamW*4)
+	cut.Cut(img, pix, fakeCamW, fakeCamH, fakeCamW*4, thumb.Crop{})
 	tex, err := gfx.UploadTexture(o.device, sdl.GPU_TEXTUREFORMAT_R8G8B8A8_UNORM, uint32(side), uint32(side), img.Pix)
 	if err != nil {
 		return nil, err
