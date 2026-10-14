@@ -8,6 +8,8 @@
 package controls
 
 import (
+	"time"
+
 	"github.com/anthonyrego/reel/internal/draw"
 	"github.com/anthonyrego/reel/internal/text"
 	"github.com/anthonyrego/reel/internal/ui"
@@ -18,6 +20,7 @@ type hit struct {
 	r       draw.Rect
 	do      func()
 	enabled bool
+	tip     string // the tooltip ("": none)
 }
 
 // Hits records this frame's controls and routes the pointer to them.
@@ -26,6 +29,25 @@ type Hits struct {
 	hover int // index into hits; -1 for none
 	press int // where the button went down; -1 for none
 	texts Texts
+
+	// The pointer, for tooltips: where it is (inside: in the window), the
+	// tooltip it's under and since when, and whether a press hid it.
+	pos       draw.Point
+	inside    bool
+	tipAt     tipKey
+	tipSince  time.Time
+	tipHidden bool
+
+	// The open menu: where it is, how far it's scrolled, and whether it
+	// was open last frame (menuWas) and is this one (menuOpen).
+	menuRect           draw.Rect
+	menuScroll, menuMax float32
+	menuOpen, menuWas  bool
+}
+
+type tipKey struct {
+	tip string
+	r   draw.Rect
 }
 
 // NewHits returns an empty registry.
@@ -33,17 +55,34 @@ func NewHits() *Hits { return &Hits{hover: -1, press: -1} }
 
 // Begin starts a frame: the controls drawn after it are the ones that
 // take clicks.
-func (h *Hits) Begin() { h.hits = h.hits[:0] }
+func (h *Hits) Begin() {
+	h.hits = h.hits[:0]
+	h.menuWas, h.menuOpen = h.menuOpen, false
+}
 
 // add records a control and reports whether the pointer is over it.
 func (h *Hits) add(r draw.Rect, enabled bool, do func()) (hovered bool) {
-	h.hits = append(h.hits, hit{r: r, do: do, enabled: enabled})
+	return h.addTip(r, enabled, do, "")
+}
+
+// addTip records a control with a tooltip.
+func (h *Hits) addTip(r draw.Rect, enabled bool, do func(), tip string) (hovered bool) {
+	h.hits = append(h.hits, hit{r: r, do: do, enabled: enabled, tip: tip})
 	return enabled && h.hover == len(h.hits)-1
 }
+
+// Hovered reports whether the pointer is over r (a control drawn some
+// other way, or a part of one), whatever is drawn over it.
+func (h *Hits) Hovered(r draw.Rect) bool { return h.inside && r.Contains(h.pos) }
 
 // Area records a clickable area drawn some other way (a list row) and
 // reports whether the pointer is over it.
 func (h *Hits) Area(r draw.Rect, do func()) bool { return h.add(r, true, do) }
+
+// AreaTip is Area with a tooltip, enabled or not.
+func (h *Hits) AreaTip(r draw.Rect, tip string, enabled bool, do func()) bool {
+	return h.addTip(r, enabled, do, tip)
+}
 
 // Event handles a pointer event: hover follows the pointer, and a click
 // (press and release on the same enabled control) runs it. It reports
@@ -59,17 +98,24 @@ func (h *Hits) Event(ev ui.Event) (redraw, handled, hand bool) {
 	}
 	switch ev.Kind {
 	case ui.PointerMove:
+		h.pos, h.inside = ev.Pos, true
 		if at != h.hover {
-			h.hover = at
+			h.hover, h.tipHidden = at, false
 			redraw = true
 		}
 	case ui.PointerLeave:
 		redraw = h.hover >= 0
-		h.hover, h.press = -1, -1
+		h.hover, h.press, h.inside = -1, -1, false
 	case ui.PointerDown:
+		h.tipHidden = true
 		if ev.Button == 1 {
 			h.press = at
 			handled = at >= 0
+		}
+	case ui.Wheel:
+		if h.menuOpen && h.menuRect.Contains(ev.Pos) {
+			h.menuScroll = max(0, min(h.menuScroll+ev.DY, h.menuMax))
+			return true, true, at >= 0 && h.hits[at].enabled
 		}
 	case ui.PointerUp:
 		if ev.Button == 1 && at >= 0 && at == h.press && h.hits[at].enabled && h.hits[at].do != nil {

@@ -219,7 +219,7 @@ func (v *View) Draw(c *ui.Ctx, l *draw.List, w, h float32) {
 	v.recordings(c, l, w)
 
 	v.toast(c, l, w, h)
-	v.openMenu(c, l, h, field, micField)
+	v.openMenu(c, l, w, h, field, micField)
 }
 
 // buttonLift raises a section header's button to sit on its line.
@@ -421,16 +421,16 @@ func (v *View) toast(c *ui.Ctx, l *draw.List, w, h float32) {
 }
 
 // openMenu draws the open dropdown over everything.
-func (v *View) openMenu(c *ui.Ctx, l *draw.List, h float32, target, mic draw.Rect) {
+func (v *View) openMenu(c *ui.Ctx, l *draw.List, w, h float32, target, mic draw.Rect) {
 	st := &v.St
 	closeMenu := func() { v.menu = "" }
 	switch v.menu {
 	case "display":
-		v.hits.Menu(c, l, target, h, st.Displays, st.Display, func(id string) { v.menu = ""; call1(v.Act.PickDisplay, id) }, closeMenu)
+		v.hits.Menu(c, l, target, w, h, st.Displays, st.Display, func(id string) { v.menu = ""; call1(v.Act.PickDisplay, id) }, closeMenu)
 	case "window":
-		v.hits.Menu(c, l, target, h, st.Windows, st.Window, func(id string) { v.menu = ""; call1(v.Act.PickWindow, id) }, closeMenu)
+		v.hits.Menu(c, l, target, w, h, st.Windows, st.Window, func(id string) { v.menu = ""; call1(v.Act.PickWindow, id) }, closeMenu)
 	case "mic":
-		v.hits.Menu(c, l, mic, h, st.Mics, st.MicID, func(id string) { v.menu = ""; call1(v.Act.PickMic, id) }, closeMenu)
+		v.hits.Menu(c, l, mic, w, h, st.Mics, st.MicID, func(id string) { v.menu = ""; call1(v.Act.PickMic, id) }, closeMenu)
 	}
 }
 
