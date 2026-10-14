@@ -19,6 +19,7 @@ import (
 
 	"github.com/anthonyrego/reel/internal/area"
 	"github.com/anthonyrego/reel/internal/config"
+	"github.com/anthonyrego/reel/internal/draw"
 	"github.com/anthonyrego/reel/internal/library"
 	"github.com/anthonyrego/reel/internal/mac"
 	"github.com/anthonyrego/reel/internal/platform"
@@ -32,7 +33,12 @@ import (
 const (
 	screenPane = "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"
 	micPane    = "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone"
+	cameraPane = "x-apple.systempreferences:com.apple.preference.security?Privacy_Camera"
 )
+
+// cameraWait bounds how long a recording waits for the camera's first
+// picture (opening a camera takes about a second).
+const cameraWait = 3 * time.Second
 
 type controller struct {
 	paths config.Paths
@@ -47,6 +53,17 @@ type controller struct {
 	openTrim func(path string)
 	// thumbs has the recordings' pictures (nil: none, as in renders).
 	thumbs *thumbs
+	// feed and bub are the camera and its bubble (nil: none, as in
+	// renders and tests). fakeCam shows the fake camera instead of the
+	// chosen one (agents), fakePick the choice made meanwhile.
+	feed     *camFeed
+	bub      *bubble
+	fakeCam  bool
+	fakePick string
+	// onTrim reports whether the main window shows the trim screen.
+	onTrim func() bool
+	// active: reel is the app in front.
+	active bool
 
 	mu      sync.Mutex
 	pending []func()
@@ -55,11 +72,17 @@ type controller struct {
 	content         mac.Content
 	names           map[uint32]string
 	mics            []mac.Mic
+	camPerm         mac.Permission
+	cams            []mac.Camera
 	window          uint32 // the chosen window (not kept between runs)
 	recs            []library.Recording
 
 	rec       *record.Recorder
 	recWindow uint32 // the window being recorded (0: not a window)
+	// recCamera: the recording in progress (or starting) shows the
+	// bubble, which stays in recRect, what it records (global points).
+	recCamera bool
+	recRect   draw.Rect
 	starting  bool
 	finishing bool
 	stopTick  chan struct{}
@@ -72,7 +95,7 @@ type controller struct {
 }
 
 func newController(paths config.Paths, v *home.View) *controller {
-	c := &controller{paths: paths, v: v, names: map[uint32]string{}}
+	c := &controller{paths: paths, v: v, names: map[uint32]string{}, fakePick: fakeCamera}
 	var err error
 	if c.set, err = settings.Load(c.settingsPath()); err != nil {
 		slog.Warn("app: settings unreadable; using the defaults", "err", err)
@@ -83,6 +106,7 @@ func newController(paths config.Paths, v *home.View) *controller {
 	v.Act = home.Actions{
 		AskScreen: do(c.askScreen), AskMic: do(c.askMic),
 		SetTarget: shows(c, c.setTarget), PickDisplay: shows(c, c.pickDisplay), PickWindow: shows(c, c.pickWindow), PickMic: shows(c, c.pickMic),
+		PickCamera:     shows(c, c.pickCamera),
 		SetSystemAudio: shows(c, c.setSystemAudio),
 		SelectArea: do(func() {
 			if c.selectArea != nil {
@@ -151,17 +175,24 @@ func (c *controller) refresh() {
 	}
 	c.gathering = true
 	go func() {
-		screen, micPerm := mac.ScreenAccess(), mac.MicAccess()
+		screen, micPerm, camPerm := mac.ScreenAccess(), mac.MicAccess(), mac.CameraAccess()
 		var content mac.Content
 		var cerr error
 		if screen == mac.PermissionGranted {
 			content, cerr = mac.ShareableContent()
 		}
 		mics, merr := mac.Mics()
+		cams, camErr := mac.Cameras()
 		recs, lerr := library.List(c.paths.Recordings)
 		c.post(func() {
 			c.gathering = false
-			c.screen, c.micPerm = screen, micPerm
+			c.screen, c.micPerm, c.camPerm = screen, micPerm, camPerm
+			if camErr == nil {
+				c.cams = cams
+			}
+			if c.feed != nil && c.camWant().on() {
+				c.feed.retry() // plugged back in, or allowed now
+			}
 			if cerr == nil {
 				c.content = content
 			} else {
@@ -244,6 +275,23 @@ func (c *controller) show() {
 		}
 		st.Windows = append(st.Windows, controls.Choice{ID: strconv.FormatUint(uint64(w.ID), 10), Label: w.App, Detail: w.Title})
 	}
+	st.Camera, st.CameraID = perm(c.camPerm), c.cameraID()
+	if c.fakeCam {
+		st.Camera = home.PermOK
+	}
+	st.Cameras = append(st.Cameras, controls.Choice{ID: home.NoCamera, Label: "No camera"})
+	known := c.cameraID() == home.NoCamera
+	for _, cam := range c.cameraList() {
+		detail := ""
+		if cam.Kind == mac.CameraContinuity {
+			detail = "iPhone"
+		}
+		st.Cameras = append(st.Cameras, controls.Choice{ID: cam.ID, Label: cam.Name, Detail: detail})
+		known = known || cam.ID == st.CameraID
+	}
+	if !known {
+		st.Cameras = append(st.Cameras, controls.Choice{ID: st.CameraID, Label: "Camera not connected"})
+	}
 	st.Mics = append(st.Mics, controls.Choice{ID: home.NoMic, Label: "No microphone"})
 	for _, m := range c.mics {
 		detail := ""
@@ -271,6 +319,151 @@ func (c *controller) show() {
 		st.Recordings = append(st.Recordings, home.Recording{Path: r.Path, Name: r.Name, Duration: r.Duration, Size: r.Size, When: r.When, Thumb: c.thumbs.id(r)})
 	}
 	c.v.St = st
+	c.syncCamera()
+}
+
+// cameraID is the chosen camera (home.NoCamera: none).
+func (c *controller) cameraID() string {
+	if c.fakeCam {
+		return c.fakePick
+	}
+	return c.set.Camera
+}
+
+// cameraList is the cameras to choose from.
+func (c *controller) cameraList() []mac.Camera {
+	if c.fakeCam {
+		return []mac.Camera{{ID: fakeCamera, Name: "Fake camera", Kind: mac.CameraExternal}}
+	}
+	return c.cams
+}
+
+// camWant is what decides whether the camera runs and the bubble shows.
+type camWant struct {
+	chosen, allowed bool // a camera is chosen, and reel may use it
+	window          bool // the target is a window (which can't show it)
+	// recording: one is in progress or starting; recCamera: it shows the
+	// bubble.
+	recording, recCamera bool
+	active, home         bool // reel is in front, on the home screen
+}
+
+// on: while recording, if the recording shows the bubble; otherwise
+// while reel is in front on the home screen, with a camera chosen and
+// allowed, for a target that can show it.
+func (w camWant) on() bool {
+	if w.recording {
+		return w.recCamera
+	}
+	return w.chosen && w.allowed && !w.window && w.active && w.home
+}
+
+func (c *controller) camWant() camWant {
+	return camWant{
+		chosen:    c.cameraID() != home.NoCamera,
+		allowed:   c.fakeCam || c.camPerm == mac.PermissionGranted,
+		window:    home.Target(c.set.Target) == home.Window,
+		recording: c.rec != nil || c.starting,
+		recCamera: c.recCamera,
+		active:    c.active,
+		home:      c.onTrim == nil || !c.onTrim(),
+	}
+}
+
+// syncCamera opens the camera and shows the bubble, or closes and hides
+// them, as camWant says. Main thread; cheap when nothing changes.
+func (c *controller) syncCamera() {
+	if c.feed == nil || c.bub == nil {
+		return
+	}
+	if !c.camWant().on() {
+		c.feed.want("")
+		c.bub.hide()
+		return
+	}
+	c.feed.want(c.cameraID())
+	if !c.bub.shown() {
+		c.bub.show(c.bubbleRect())
+	}
+}
+
+// bubbleRect is where the bubble shows: where it was left (on a display
+// still there), or the bottom-left of what's recorded.
+func (c *controller) bubbleRect() draw.Rect {
+	if b := c.set.Bubble; b != nil {
+		r := draw.Rect{X: float32(b.X), Y: float32(b.Y), W: float32(b.Size), H: float32(b.Size)}
+		return clampBubble(r, usableAt(r.X+r.W/2, r.Y+r.H/2), bubbleMin, bubbleMax)
+	}
+	_, usable, ok := c.targetRect()
+	if !ok {
+		usable = usableAt(0, 0)
+	}
+	return fitInto(draw.Rect{X: -1e6, W: bubbleDefault, H: bubbleDefault}, usable)
+}
+
+// targetRect is what the chosen display or area records, in global
+// points, and the part of it the Dock and the menu bar leave (false for a
+// window, or nothing chosen).
+func (c *controller) targetRect() (recorded, usable draw.Rect, ok bool) {
+	switch home.Target(c.set.Target) {
+	case home.Area:
+		a := c.set.Area
+		if a == nil {
+			return recorded, usable, false
+		}
+		for _, d := range c.content.Displays {
+			if d.ID == a.Display {
+				recorded = draw.Rect{X: float32(d.Frame.X + a.X), Y: float32(d.Frame.Y + a.Y), W: float32(a.W), H: float32(a.H)}
+				ok = true
+			}
+		}
+	case home.Display:
+		if d := c.display(); d != nil {
+			recorded = draw.Rect{X: float32(d.Frame.X), Y: float32(d.Frame.Y), W: float32(d.Frame.W), H: float32(d.Frame.H)}
+			ok = true
+		}
+	}
+	if !ok {
+		return recorded, usable, false
+	}
+	usable = recorded.Intersect(usableAt(recorded.X+recorded.W/2, recorded.Y+recorded.H/2))
+	if usable.Empty() {
+		usable = recorded
+	}
+	return recorded, usable, true
+}
+
+// fitBubble moves the bubble into what's recorded now (a different
+// display or area was chosen), where it would be recorded.
+func (c *controller) fitBubble() {
+	if c.cameraID() == home.NoCamera {
+		return
+	}
+	_, usable, ok := c.targetRect()
+	if !ok {
+		return
+	}
+	r := c.bubbleRect()
+	if c.bub != nil && c.bub.shown() {
+		r = c.bub.r
+	}
+	if fit := fitInto(r, usable); fit != r {
+		c.keepBubble(fit)
+		if c.bub != nil && c.bub.shown() {
+			c.bub.place(fit)
+		}
+	}
+}
+
+// keepBubble saves where the bubble is.
+func (c *controller) keepBubble(r draw.Rect) {
+	c.set.Bubble = &settings.Bubble{X: float64(r.X), Y: float64(r.Y), Size: float64(r.W)}
+	c.save()
+}
+
+// recorded is the rect a recording showing the bubble keeps it in.
+func (c *controller) recorded() (draw.Rect, bool) {
+	return c.recRect, c.recCamera && (c.rec != nil || c.starting)
 }
 
 func perm(p mac.Permission) home.Perm {
@@ -283,8 +476,22 @@ func perm(p mac.Permission) home.Perm {
 	return home.PermDenied
 }
 
-// warning is a line about the sound setup that will disappoint.
+// warning is a line about the camera that failed, or the sound setup that
+// will disappoint.
 func (c *controller) warning() string {
+	if c.feed != nil && c.camWant().on() {
+		if st, err := c.feed.status(); st == camFailed {
+			switch {
+			case errors.Is(err, mac.ErrNotBundle):
+				return "The camera works only in Reel.app (make run): this is the bare binary."
+			case errors.Is(err, mac.ErrNoCameraAccess):
+				return "Reel isn't allowed to use the camera: allow it in System Settings › Camera."
+			case err != nil:
+				return "The camera stopped: " + err.Error()
+			}
+			return "The camera stopped."
+		}
+	}
 	for _, m := range c.mics {
 		if m.ID != c.set.Mic {
 			continue
@@ -326,12 +533,14 @@ func (c *controller) setTarget(t home.Target) {
 	if t == home.Window {
 		c.refresh() // windows come and go
 	}
+	c.fitBubble()
 }
 
 func (c *controller) pickDisplay(id string) {
 	n, _ := strconv.ParseUint(id, 10, 32)
 	c.set.Display = uint32(n)
 	c.save()
+	c.fitBubble()
 }
 
 func (c *controller) pickWindow(id string) {
@@ -342,6 +551,31 @@ func (c *controller) pickWindow(id string) {
 func (c *controller) pickMic(id string) {
 	c.set.Mic, c.set.MicChosen = id, true
 	c.save()
+}
+
+// pickCamera chooses the bubble's camera. The first choice of one asks
+// for the Camera permission (only Reel.app can); a denied one opens
+// System Settings.
+func (c *controller) pickCamera(id string) {
+	if c.fakeCam {
+		c.fakePick = id
+		return
+	}
+	c.set.Camera = id
+	c.save()
+	if id == home.NoCamera {
+		return
+	}
+	c.fitBubble()
+	switch c.camPerm {
+	case mac.PermissionUnknown:
+		if err := mac.RequestCameraAccess(func(bool) { c.post(c.refresh) }); err != nil {
+			c.say("Only Reel.app can use the camera (make run)")
+		}
+	case mac.PermissionDenied:
+		openURL(cameraPane)
+		c.say("Allow Reel under Camera, then come back")
+	}
 }
 
 func (c *controller) setSystemAudio(on bool) {
@@ -394,7 +628,10 @@ func (c *controller) recordConfig() (record.Config, error) {
 	}
 }
 
-// record starts a recording.
+// record starts a recording. One that shows the bubble (a display or
+// an area, with a camera chosen and allowed: from another app too) moves
+// it into what's recorded, opens the camera and waits for its first
+// picture, so the recording starts with it.
 func (c *controller) record() {
 	if c.rec != nil || c.starting || c.finishing {
 		return
@@ -405,6 +642,38 @@ func (c *controller) record() {
 		return
 	}
 	c.errText, c.starting = "", true
+	w := c.camWant()
+	w.recording, w.active, w.home = false, true, true
+	recorded, usable, ok := c.targetRect()
+	c.recCamera = c.feed != nil && c.bub != nil && ok && w.on()
+	if !c.recCamera {
+		c.start(cfg)
+		return
+	}
+	c.recRect = recorded
+	c.syncCamera()
+	if fit := fitInto(c.bub.r, usable); fit != c.bub.r {
+		c.bub.place(fit)
+		c.keepBubble(fit)
+	}
+	c.feed.ready(cameraWait, func(ok bool) {
+		n, err := c.bub.windowNumber()
+		if err != nil {
+			slog.Warn("app: the bubble's window", "err", err)
+		} else {
+			cfg.Video.Target.Show = []uint32{n}
+		}
+		if lag, got := c.feed.lag(); ok && got {
+			cfg.MicDelay = lag + bubbleDelay
+		} else {
+			slog.Warn("app: no picture from the camera yet: recording anyway")
+		}
+		c.start(cfg)
+	})
+}
+
+// start starts the recording cfg describes, off the main thread.
+func (c *controller) start(cfg record.Config) {
 	go func() {
 		r, err := record.Start(cfg)
 		c.post(func() {
@@ -412,6 +681,7 @@ func (c *controller) record() {
 			if err != nil {
 				c.errText = "Couldn't start: " + err.Error()
 				slog.Error("app: record", "err", err)
+				c.recCamera = false
 				return
 			}
 			c.rec, c.recWindow = r, cfg.Video.Target.WindowID
@@ -490,7 +760,7 @@ func (c *controller) finished(r *record.Recorder) {
 		close(c.stopTick)
 		c.stopTick = nil
 	}
-	c.rec, c.recWindow, c.finishing = nil, 0, false
+	c.rec, c.recWindow, c.finishing, c.recCamera = nil, 0, false, false
 	if c.onLive != nil {
 		c.onLive(false)
 	}
@@ -581,4 +851,5 @@ func (c *controller) setArea(display uint32, x, y, w, h float64) {
 	c.set.Area = &settings.Area{Display: display, X: x, Y: y, W: w, H: h}
 	c.set.Target = string(home.Area)
 	c.save()
+	c.fitBubble()
 }

@@ -101,7 +101,7 @@ var selectors = map[string][]string{
 	"+NSWorkspace":          {"sharedWorkspace"},
 	"NSWorkspace":           {"notificationCenter"},
 	"+NSNotificationCenter": {"defaultCenter"},
-	"NSNotificationCenter":  {"addObserverForName:object:queue:usingBlock:", "removeObserver:"},
+	"NSNotificationCenter":  {"addObserverForName:object:queue:usingBlock:", "removeObserver:", "postNotificationName:object:"},
 	"NSNotification":        {"object", "userInfo"},
 	"+NSPasteboard":         {"generalPasteboard"},
 	"NSPasteboard":          {"clearContents", "writeObjects:"},

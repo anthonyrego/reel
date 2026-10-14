@@ -81,6 +81,60 @@ func clickAll(t *testing.T, v *View) map[string]int {
 	return ran
 }
 
+// The camera chip opens its menu, whose choice runs PickCamera; a window
+// recording can't show the camera, and nothing changes while recording,
+// so there the chip does nothing.
+func TestCameraChip(t *testing.T) {
+	c := ctx(t)
+	press := func(v *View, at draw.Point) {
+		v.Event(c, ui.Event{Kind: ui.PointerMove, Pos: at})
+		v.Event(c, ui.Event{Kind: ui.PointerDown, Pos: at, Button: 1})
+		v.Event(c, ui.Event{Kind: ui.PointerUp, Pos: at, Button: 1})
+	}
+	mid := func(r draw.Rect) draw.Point { return draw.Point{X: r.X + r.W/2, Y: r.Y + r.H/2} }
+	for _, width := range []float32{640, 900} {
+		v := New()
+		v.St = state()
+		v.St.Cameras = []controls.Choice{{ID: NoCamera, Label: "No camera"}, {ID: "cam", Label: "FaceTime HD Camera"}}
+		var picked []string
+		v.Act.PickCamera = func(id string) { picked = append(picked, id) }
+		var l draw.List
+		v.Draw(c, &l, width, 640)
+		before := len(v.hits.Rects())
+		press(v, mid(v.camera))
+		if v.menu != "camera" {
+			t.Fatalf("at %v: the chip opened %q", width, v.menu)
+		}
+		l.Reset()
+		v.Draw(c, &l, width, 640)
+		var last draw.Rect
+		for _, r := range v.hits.Rects()[before:] {
+			if r.W < 1e4 && r.Y > last.Y {
+				last = r
+			}
+		}
+		press(v, mid(last))
+		if len(picked) != 1 || picked[0] != "cam" {
+			t.Errorf("at %v: picked %v", width, picked)
+		}
+	}
+	for name, st := range map[string]func(*State){
+		"a window target": func(s *State) { s.Target, s.Windows, s.Window = Window, []controls.Choice{{ID: "9", Label: "Notes"}}, "9" },
+		"recording":       func(s *State) { s.Live = &Live{} },
+	} {
+		v := New()
+		v.St = state()
+		st(&v.St)
+		v.Act.PickCamera = func(string) {}
+		var l draw.List
+		v.Draw(c, &l, 900, 640)
+		press(v, mid(v.camera))
+		if v.menu != "" {
+			t.Errorf("%s: the chip opened %q", name, v.menu)
+		}
+	}
+}
+
 func TestRecordNeedsScreenRecording(t *testing.T) {
 	v := New()
 	v.St = state()

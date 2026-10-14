@@ -175,13 +175,24 @@ func TestOnSleepRegisters(t *testing.T) {
 	}
 }
 
-// TestOnActiveRegisters: the observers register without an exception, and
-// a test binary (no window, run from a terminal) isn't the active app.
-func TestOnActiveRegisters(t *testing.T) {
-	if err := OnActive(func(bool) {}); err != nil {
+// TestOnActive: the observers register without an exception and hear
+// the notifications (posted here: a test binary can't become the active
+// app).
+func TestOnActive(t *testing.T) {
+	var heard []bool
+	if err := OnActive(func(active bool) { heard = append(heard, active) }); err != nil {
 		t.Fatal(err)
 	}
 	_ = AppActive()
+	withPool(func() {
+		center := class("NSNotificationCenter").Send(sel("defaultCenter"))
+		for _, name := range []string{"NSApplicationDidBecomeActiveNotification", "NSApplicationDidResignActiveNotification"} {
+			center.Send(sel("postNotificationName:object:"), constant(name), objc.ID(0))
+		}
+	})
+	if len(heard) != 2 || !heard[0] || heard[1] {
+		t.Fatalf("heard %v, want [true false]", heard)
+	}
 }
 
 // TestNotBundle: a test binary isn't Reel.app, so it lists no iPhones and

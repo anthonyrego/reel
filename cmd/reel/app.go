@@ -96,7 +96,7 @@ func runApp(args []string) error {
 	exitAfter := fs.Duration("exit-after", 0, "quit by itself after this long (unattended runs)")
 	size := fs.String("size", "800x640", "window size in points, WxH")
 	trimFile := fs.String("trim", "", "dev: open on the trim screen for this recording (unattended runs)")
-	fakeCam := fs.Bool("fake-camera", false, "dev: the camera bubble shows a fake camera (agents: no camera is opened)")
+	fakeCam := fs.Bool("fake-camera", false, "dev: the camera bubble shows a fake camera, as if reel were in front (agents: no camera is opened)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -133,13 +133,21 @@ func runApp(args []string) error {
 	c.thumbs = newThumbs(a.device, a.renderer, c.post)
 	defer c.thumbs.close()
 	a.setScene(&homeScene{v: v, woken: c.woke, focused: c.refresh, drew: c.drew})
-	feed := newCamFeed(c.post)
-	bub := newBubble(a, feed)
-	defer bub.close()
-	defer feed.stop()
-	if *fakeCam {
-		bub.show(fitInto(draw.Rect{X: -1e6}, usableAt(0, 0)))
-		feed.want(fakeCamera)
+	// The camera bubble: while reel is in front on the home screen, and
+	// in the display and area recordings that show it.
+	c.feed = newCamFeed(c.post)
+	c.bub = newBubble(a, c.feed)
+	defer c.bub.close()
+	defer c.feed.stop()
+	c.fakeCam = *fakeCam
+	c.bub.keep, c.bub.moved = c.recorded, c.keepBubble
+	c.onTrim = func() bool { _, trim := a.main.scene.(*trimScene); return trim }
+	// An agent's run can't bring reel to the front (macOS lets an app
+	// take focus only when the one in front yields it): with the fake
+	// camera, it starts as if it were.
+	c.active = mac.AppActive() || *fakeCam
+	if err := mac.OnActive(func(active bool) { c.post(func() { c.active = active }) }); err != nil {
+		slog.Warn("app: activation notifications", "err", err)
 	}
 	hud := newHUD(a, c)
 	c.onLive = hud.live

@@ -36,6 +36,10 @@ func TestActionsShow(t *testing.T) {
 	if v.St.MicID != "m" {
 		t.Errorf("picked a mic: the view shows %q", v.St.MicID)
 	}
+	v.Act.PickCamera(home.NoCamera)
+	if v.St.CameraID != home.NoCamera || len(v.St.Cameras) == 0 {
+		t.Errorf("picked no camera: the view shows %q of %v", v.St.CameraID, v.St.Cameras)
+	}
 	on := v.St.SystemAudio
 	v.Act.SetSystemAudio(!on)
 	if v.St.SystemAudio == on {
@@ -45,5 +49,30 @@ func TestActionsShow(t *testing.T) {
 	v.Act.Record() // no window chosen: fails at once, starting nothing
 	if v.St.Error == "" {
 		t.Error("Record with no window: no error shown")
+	}
+}
+
+// The camera runs while reel is in front on the home screen with a camera
+// chosen and allowed, for a display or an area; and while a recording
+// that shows it runs, whatever else.
+func TestCamWant(t *testing.T) {
+	front := camWant{chosen: true, allowed: true, active: true, home: true}
+	for _, tc := range []struct {
+		name string
+		w    camWant
+		on   bool
+	}{
+		{"in front, chosen and allowed", front, true},
+		{"none chosen", camWant{allowed: true, active: true, home: true}, false},
+		{"not allowed", camWant{chosen: true, active: true, home: true}, false},
+		{"a window target", camWant{chosen: true, allowed: true, window: true, active: true, home: true}, false},
+		{"another app in front", camWant{chosen: true, allowed: true, home: true}, false},
+		{"the trim screen", camWant{chosen: true, allowed: true, active: true}, false},
+		{"recording with it, another app in front", camWant{chosen: true, allowed: true, recording: true, recCamera: true}, true},
+		{"recording without it, reel in front", camWant{chosen: true, allowed: true, active: true, home: true, recording: true}, false},
+	} {
+		if got := tc.w.on(); got != tc.on {
+			t.Errorf("%s: on = %v, want %v", tc.name, got, tc.on)
+		}
 	}
 }

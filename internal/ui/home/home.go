@@ -1,6 +1,6 @@
 // Package home is reel's main window: the record bar (what to record, the
-// sound, Record; while recording, the floating controls' clock, pause and
-// stop) and the recordings under it as cards, newest first, each a click
+// sound, the camera, Record; while recording, the floating controls'
+// clock, pause and stop) and the recordings under it as cards, newest first, each a click
 // away from the clipboard. Pure: it draws a State and calls Actions; the
 // app owns both.
 package home
@@ -61,6 +61,9 @@ type Live struct {
 // NoMic is the microphone choice that records none.
 const NoMic = ""
 
+// NoCamera is the camera choice that shows none.
+const NoCamera = ""
+
 // State is everything the window shows.
 type State struct {
 	Screen, Mic Perm
@@ -76,8 +79,16 @@ type State struct {
 	Mics        []controls.Choice
 	MicID       string // NoMic for none
 	SystemAudio bool
-	// Warning is a line about the sound (echo, a Bluetooth mic).
+	// Warning is a line about the sound (echo, a Bluetooth mic) or the
+	// camera.
 	Warning string
+
+	// Cameras are the cameras the bubble can show; CameraID the chosen
+	// one (NoCamera: none). Camera is its permission: choosing a camera
+	// asks for it.
+	Cameras  []controls.Choice
+	CameraID string
+	Camera   Perm
 
 	// HotKey names the global key that starts and stops ("⌃⌥R").
 	HotKey string
@@ -105,6 +116,7 @@ type Actions struct {
 	PickWindow        func(id string)
 	SelectArea        func()
 	PickMic           func(id string)
+	PickCamera        func(id string)
 	SetSystemAudio    func(on bool)
 	Record            func()
 	Pause, Resume     func()
@@ -121,9 +133,10 @@ type View struct {
 	Act Actions
 
 	hits    *controls.Hits
-	menu    string    // the open dropdown: "display", "window", "mic" or ""
+	menu    string    // the open dropdown: "display", "window", "mic", "camera" or ""
 	source  draw.Rect // the source chip, this frame (a menu hangs from it)
 	mic     draw.Rect // the mic chip
+	camera  draw.Rect // the camera chip
 	scroll  float32
 	listTop float32     // where the recordings start, this frame
 	listH   float32     // their visible height
@@ -213,24 +226,40 @@ func (v *View) bar(c *ui.Ctx, l *draw.List, w, y float32) float32 {
 		func() { call1(v.Act.SetSystemAudio, !st.SystemAudio) })
 	right = sa.X - 4
 
-	// The source and the mic share what's between: each whole if they
-	// fit, else the source keeps at least its label or about 60%.
+	// The source, the mic and the camera share what's between: each whole
+	// if they fit; else the display's size goes, then the camera and the
+	// mic show only their icons (their names in their tooltips), and last
+	// the source's label is cut (to no less than about half).
 	srcLabel, srcDetail, srcHold, srcOK, srcOpen := v.sourceChip()
 	micLabel, _ := find(st.Mics, st.MicID)
 	micIcon := icons.Mic
 	if st.MicID == NoMic {
 		micIcon, micLabel = icons.MicOff, ""
 	}
-	avail := right - x - 9
+	camLabel, _ := find(st.Cameras, st.CameraID)
+	camIcon := icons.Camera
+	if st.CameraID == NoCamera {
+		camIcon, camLabel = icons.CameraOff, ""
+	}
+	avail := right - x - 2*9
 	srcNat := v.hits.ChipWidth(c, false, labelOr(srcLabel, srcHold), srcDetail)
 	srcBare := v.hits.ChipWidth(c, false, labelOr(srcLabel, srcHold), "")
 	micNat := v.hits.ChipWidth(c, true, labelOr(micLabel, "No microphone"), "")
-	srcW := min(srcNat, max(avail-micNat, min(srcBare, avail*0.58)))
-	if srcW < srcNat {
-		srcW = min(srcW, srcBare) // the detail doesn't fit: no room kept for it
+	camNat := v.hits.ChipWidth(c, true, labelOr(camLabel, "No camera"), "")
+	iconOnly := v.hits.ChipWidth(c, true, "", "")
+	srcW, micW, camW := srcNat, micNat, camNat
+	fits := func() bool { return srcW+micW+camW <= avail }
+	if !fits() {
+		srcW = srcBare
 	}
-	micW := min(micNat, avail-srcW)
-	srcTip, micTip := "", ""
+	if !fits() {
+		camW = iconOnly
+	}
+	if !fits() {
+		micW = iconOnly
+	}
+	srcW = min(srcW, max(avail-micW-camW, min(srcBare, avail*0.5)))
+	srcTip, micTip, camTip := "", "", ""
 	if srcW < srcBare && srcLabel != "" {
 		srcTip = srcLabel
 		if srcDetail != "" {
@@ -238,7 +267,27 @@ func (v *View) bar(c *ui.Ctx, l *draw.List, w, y float32) float32 {
 		}
 	}
 	if micW < micNat {
-		micTip = micLabel
+		micTip = labelOr(micLabel, "No microphone")
+	}
+	if micW == iconOnly {
+		micLabel = ""
+	}
+	camOK := !recording && v.Act.PickCamera != nil && st.Target != Window
+	switch {
+	case st.Target == Window:
+		camTip = "A window recording can't show the camera"
+	case camW < camNat:
+		camTip = labelOr(camLabel, "No camera")
+	case st.Camera == PermDenied && st.CameraID != NoCamera:
+		camTip = "Allow Reel in System Settings › Camera"
+	}
+	camHold := "No camera"
+	if camW == iconOnly {
+		camLabel, camHold = "", ""
+	}
+	micHold := "No microphone"
+	if micW == iconOnly {
+		micHold = ""
 	}
 	v.source = draw.Rect{X: x, Y: mid - segSize/2, W: srcW, H: segSize}
 	v.hits.Chip(c, l, v.source, nil, srcLabel, srcDetail, srcHold, srcTip, !recording && srcOK, srcOpen)
@@ -246,8 +295,13 @@ func (v *View) bar(c *ui.Ctx, l *draw.List, w, y float32) float32 {
 	divider(l, x, mid, pal)
 	x += 5
 	v.mic = draw.Rect{X: x, Y: mid - segSize/2, W: micW, H: segSize}
-	v.hits.Chip(c, l, v.mic, micIcon, micLabel, "", "No microphone", micTip,
+	v.hits.Chip(c, l, v.mic, micIcon, micLabel, "", micHold, micTip,
 		!recording && st.Mic == PermOK && v.Act.PickMic != nil, v.opener("mic"))
+	x = v.mic.Right() + 4
+	divider(l, x, mid, pal)
+	x += 5
+	v.camera = draw.Rect{X: x, Y: mid - segSize/2, W: camW, H: segSize}
+	v.hits.Chip(c, l, v.camera, camIcon, camLabel, "", camHold, camTip, camOK, v.opener("camera"))
 	return bar.Bottom()
 }
 
@@ -611,6 +665,8 @@ func (v *View) openMenu(c *ui.Ctx, l *draw.List, w, h float32) {
 		v.hits.Menu(c, l, v.source, w, h, st.Windows, st.Window, func(id string) { v.menu = ""; call1(v.Act.PickWindow, id) }, closeMenu)
 	case "mic":
 		v.hits.Menu(c, l, v.mic, w, h, st.Mics, st.MicID, func(id string) { v.menu = ""; call1(v.Act.PickMic, id) }, closeMenu)
+	case "camera":
+		v.hits.Menu(c, l, v.camera, w, h, st.Cameras, st.CameraID, func(id string) { v.menu = ""; call1(v.Act.PickCamera, id) }, closeMenu)
 	}
 }
 
@@ -668,7 +724,8 @@ func (v *View) Card(path string) (draw.Rect, bool) {
 	return draw.Rect{}, false
 }
 
-// OpenMenu opens a dropdown ("display", "window", "mic"; "" closes).
+// OpenMenu opens a dropdown ("display", "window", "mic", "camera"; ""
+// closes).
 func (v *View) OpenMenu(name string) { v.menu = name }
 
 // AskDelete shows a recording's Delete asking again, for renders.

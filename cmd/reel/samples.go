@@ -25,11 +25,22 @@ var samples = map[string]func(now time.Time) (home.State, string){
 		s.Live = &home.Live{Elapsed: 83 * time.Second, Paused: true}
 		return s, ""
 	},
-	"mic-menu": func(now time.Time) (home.State, string) { return sampleIdle(now), "mic" },
+	"mic-menu":    func(now time.Time) (home.State, string) { return sampleIdle(now), "mic" },
+	"camera-menu": func(now time.Time) (home.State, string) { return sampleIdle(now), "camera" },
+	"no-camera": func(now time.Time) (home.State, string) {
+		s := sampleIdle(now)
+		s.CameraID = home.NoCamera
+		return s, ""
+	},
 	"window": func(now time.Time) (home.State, string) {
 		s := sampleIdle(now)
 		s.Target, s.Window = home.Window, "41"
 		return s, "window"
+	},
+	"window-camera": func(now time.Time) (home.State, string) {
+		s := sampleIdle(now)
+		s.Target, s.Window = home.Window, "41"
+		return s, ""
 	},
 	"area": func(now time.Time) (home.State, string) {
 		s := sampleIdle(now)
@@ -109,7 +120,14 @@ func sampleIdle(now time.Time) home.State {
 			{ID: "BuiltInMicrophoneDevice", Label: "MacBook Pro Microphone"},
 			{ID: "airpods", Label: "AirPods Pro", Detail: "Bluetooth"},
 		},
-		MicID:       "usb-interface",
+		MicID: "usb-interface",
+		Cameras: []controls.Choice{
+			{ID: home.NoCamera, Label: "No camera"},
+			{ID: "facetime", Label: "FaceTime HD Camera"},
+			{ID: "brio", Label: "Logitech BRIO"},
+			{ID: "iphone", Label: "iPhone Camera", Detail: "iPhone"},
+		},
+		CameraID:    "facetime",
 		SystemAudio: true,
 		HotKey:      "⌃⌥R",
 		Recordings:  recs,
@@ -121,7 +139,7 @@ func sampleActions() home.Actions {
 	nop, nop1 := func() {}, func(string) {}
 	return home.Actions{
 		AskScreen: nop, AskMic: nop, SetTarget: func(home.Target) {}, PickDisplay: nop1, PickWindow: nop1,
-		SelectArea: nop, PickMic: nop1, SetSystemAudio: func(bool) {}, Record: nop, Pause: nop, Resume: nop,
+		SelectArea: nop, PickMic: nop1, PickCamera: nop1, SetSystemAudio: func(bool) {}, Record: nop, Pause: nop, Resume: nop,
 		Stop: nop, Copy: nop1, Reveal: nop1, Open: nop1, Delete: nop1, Trim: nop1, OpenFolder: nop,
 	}
 }
