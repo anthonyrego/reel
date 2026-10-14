@@ -81,10 +81,10 @@ type State struct {
 
 	// HotKey names the global key that starts and stops ("⌃⌥R").
 	HotKey string
-	// Live is the recording in progress (nil: none); Finishing is set
-	// while the last one is being written out.
-	Live      *Live
-	Finishing bool
+	// Live is the recording in progress (nil: none); Starting is set
+	// while one starts, Finishing while the last one is being written out.
+	Live                *Live
+	Starting, Finishing bool
 	// Error is the last thing that went wrong, shown until the next try.
 	Error string
 
@@ -182,7 +182,7 @@ func (v *View) Draw(c *ui.Ctx, l *draw.List, w, h float32) {
 func (v *View) bar(c *ui.Ctx, l *draw.List, w, y float32) float32 {
 	pal := c.Pal
 	st := &v.St
-	recording := st.Live != nil || st.Finishing
+	recording := st.Live != nil || st.Starting || st.Finishing
 	bar := draw.Rect{X: pad, Y: y, W: w - 2*pad, H: barH}
 	l.Shadow(bar, pal.Shadow, draw.Uniform(barH/2), 14)
 	l.BorderedRect(bar, pal.Bar, pal.Border, 1, draw.Uniform(barH/2))
@@ -274,8 +274,12 @@ func (v *View) record(c *ui.Ctx, l *draw.List, w, right, mid float32) float32 {
 	t := v.hits.Texts()
 	st := &v.St
 	switch {
-	case st.Finishing:
-		lay := t.Lay(c, "Saving…", text.SansSemibold, bodySize)
+	case st.Starting, st.Finishing:
+		msg := "Saving…"
+		if st.Starting {
+			msg = "Starting…"
+		}
+		lay := t.Lay(c, msg, text.SansSemibold, bodySize)
 		controls.Put(l, lay, right-12-lay.Width, mid-lay.Height/2, pal.TextMuted)
 		return right - 24 - lay.Width
 	case st.Live != nil:

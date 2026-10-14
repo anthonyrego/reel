@@ -113,14 +113,15 @@ func (h *hud) draw(c *ui.Ctx, l *draw.List, w, ht float32) {
 	lay := t.Lay(c, label, text.SansSemibold, 14)
 	controls.Put(l, lay, 36, mid-lay.Height/2, fg)
 
-	// Stop, then Pause or Resume, from the right.
+	// Stop, then Pause or Resume, from the right: the main window's own
+	// actions, which show what they did there too.
 	const btn = 32
 	stop := draw.Rect{X: w - 8 - btn, Y: mid - btn/2, W: btn, H: btn}
 	pause := draw.Rect{X: stop.X - 4 - btn, Y: stop.Y, W: btn, H: btn}
 	enabled := !st.Finishing
 	if h.hits.Area(stop, func() {
 		if enabled {
-			h.c.stop()
+			h.c.v.Act.Stop()
 		}
 	}) && enabled {
 		l.Rect(stop, fg.WithAlpha(0x22), draw.Uniform(btn/2))
@@ -133,9 +134,9 @@ func (h *hud) draw(c *ui.Ctx, l *draw.List, w, ht float32) {
 			return
 		}
 		if paused {
-			h.c.resume()
+			h.c.v.Act.Resume()
 		} else {
-			h.c.pause()
+			h.c.v.Act.Pause()
 		}
 	}) && enabled {
 		l.Rect(pause, fg.WithAlpha(0x22), draw.Uniform(btn/2))

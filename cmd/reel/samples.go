@@ -55,6 +55,11 @@ var samples = map[string]func(now time.Time) (home.State, string){
 		s.Error = "The recording stopped by itself (the display was disconnected); what it got is saved."
 		return s, ""
 	},
+	"starting": func(now time.Time) (home.State, string) {
+		s := sampleIdle(now)
+		s.Starting = true
+		return s, ""
+	},
 	"finishing": func(now time.Time) (home.State, string) {
 		s := sampleIdle(now)
 		s.Finishing = true

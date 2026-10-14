@@ -77,24 +77,32 @@ func newController(paths config.Paths, v *home.View) *controller {
 	if c.set, err = settings.Load(c.settingsPath()); err != nil {
 		slog.Warn("app: settings unreadable; using the defaults", "err", err)
 	}
+	// Each action shows what it did as soon as it's done: the view's
+	// State is built again from the controller.
+	do := func(fn func()) func() { return func() { fn(); c.show() } }
 	v.Act = home.Actions{
-		AskScreen: c.askScreen, AskMic: c.askMic,
-		SetTarget: c.setTarget, PickDisplay: c.pickDisplay, PickWindow: c.pickWindow, PickMic: c.pickMic,
-		SetSystemAudio: c.setSystemAudio,
-		SelectArea: func() {
+		AskScreen: do(c.askScreen), AskMic: do(c.askMic),
+		SetTarget: shows(c, c.setTarget), PickDisplay: shows(c, c.pickDisplay), PickWindow: shows(c, c.pickWindow), PickMic: shows(c, c.pickMic),
+		SetSystemAudio: shows(c, c.setSystemAudio),
+		SelectArea: do(func() {
 			if c.selectArea != nil {
 				c.selectArea()
 			}
-		},
-		Record: c.record, Pause: c.pause, Resume: c.resume, Stop: c.stop,
-		Copy: c.copy, Reveal: c.reveal, Open: c.open, Delete: c.delete, OpenFolder: c.openFolder,
-		Trim: func(path string) {
+		}),
+		Record: do(c.record), Pause: do(c.pause), Resume: do(c.resume), Stop: do(c.stop),
+		Copy: shows(c, c.copy), Reveal: shows(c, c.reveal), Open: shows(c, c.open), Delete: shows(c, c.delete), OpenFolder: do(c.openFolder),
+		Trim: shows(c, func(path string) {
 			if c.openTrim != nil {
 				c.openTrim(path)
 			}
-		},
+		}),
 	}
 	return c
+}
+
+// shows is fn, then the view's State built again to show what it did.
+func shows[T any](c *controller, fn func(T)) func(T) {
+	return func(v T) { fn(v); c.show() }
 }
 
 func (c *controller) settingsPath() string { return filepath.Join(c.paths.Data, "settings.json") }
@@ -211,7 +219,8 @@ func (c *controller) show() {
 		MicID:       c.set.Mic,
 		SystemAudio: c.set.SystemAudio,
 		HotKey:      platform.HotKeyName,
-		Finishing:   c.finishing || c.starting,
+		Starting:    c.starting,
+		Finishing:   c.finishing,
 		Error:       c.errText,
 		Copied:      c.copied,
 		Toast:       c.toast,
