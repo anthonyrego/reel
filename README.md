@@ -7,10 +7,11 @@ Pick a display, a window or a part of the screen, press ⌃⌥R and talk. Reel r
 - **Your voice and your Mac's sound, together.** Talk over a video, a demo with sound or a call. Both end up in the recording, in sync from the first second to the last.
 - **Any part of the screen.** A whole display, one window, or an area you drag out.
 - **Pause when you need to.** The pause is cut out cleanly, and the recording picks up with what's on screen when you resume.
-- **Out of the way.** A small floating control shows the time, pause and stop. ⌃⌥R works from any app, and Reel's own windows never show up in a recording.
+- **Your face, if you want it.** Pick a camera and a round bubble floats over the screen; drag it where you like, scroll or pinch to size it, and the recording shows it just where it is. It's on only while Reel is in front or recording.
+- **Out of the way.** A small floating control shows the time, pause and stop. ⌃⌥R works from any app, and Reel's own windows (but the camera bubble) never show up in a recording.
 - **An MP4 that plays anywhere,** written as it records, so a crash costs seconds, not the recording.
 
-**Status:** early. The recording pipeline is done and tested (milestones M0–M4); the app (M5) and trimming (M6) are being tried out. The design and milestones are in [docs/plan.md](docs/plan.md).
+**Status:** early. The recording pipeline is done and tested (milestones M0–M4); the app (M5), trimming (M6) and the camera (M8) are being tried out. The design and milestones are in [docs/plan.md](docs/plan.md).
 
 ## Requirements
 

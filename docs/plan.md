@@ -12,7 +12,8 @@ The author shares screen recordings with co-workers often. macOS's built-in reco
 
 **v1 scope he chose:**
 - In: a regular Dock window app (setup plus a recordings list), pause/resume, trim after stop.
-- Out: upload, webcam, live mic meter.
+- Out: upload, live mic meter.
+- Added after M6 (M8): the camera, as a round bubble on screen that display and area recordings show as it is (a window recording can't show another window).
 
 **Stack:** the same as the author's earlier projects.
 - Go, with SDL3 GPU through Zyko0/go-sdl3.
@@ -164,6 +165,7 @@ The mixer's drift loop and the bridge are where the real difficulty is. The UI i
 | **M5** App UI | main window (target segmented control, display picker, window list, area overlay, mic dropdown, system-audio toggle, warnings), HUD (timer/pause/stop), global hotkey, library list (copy/reveal/open/delete), auto-copy on stop | `reel render` goldens for each state; `app -exit-after` run, log read | record all 3 target types on both displays, paste into Slack, play it on a co-worker's machine |
 | **M6** Trim | `AVAssetExportSession` passthrough + `timeRange` (Objective-C API; the new async API is Swift-only), one scrub frame via the image generator (CMTime callback arg = pointer on arm64; deprecated synchronous `copyCGImageAtTime` as the fallback) | `trim -from 2 -to 5`: 3.00 ± 0.04 s; A/V offset kept; extra lead-in reported with `-ignore_editlist 1` | trim in the UI, paste into Slack |
 | **M7** Soak | — | `selftest 30m`: RSS grows < 1 MB/min; A/V drift ≤ 10 ms | 30 min with the mic: unplug the USB mic, close the recorded window, stop from Control Center, let the display sleep. Each must leave a playable file |
+| **M8** Camera | a camera chip; the bubble (an SDL window on every Space, dragged, scrolled or pinched to resize), the camera opened in Reel.app only (AVCaptureVideoDataOutput, BGRA, frames cut to the bubble off the main thread, a frame-only wake); on while reel is in front on the home screen and while a recording shows it; `Target.Show` (the bubble in `exceptingWindows`); the mic placed later by the camera's lag plus `bubbleRefreshes` | `render -scene bubble`, the camera chip at 640 and 900; `app -fake-camera` (30 uploads a second, the main window not redrawn for them); `selftest -camera`: every bubble flash in the recording, the fake mic's clicks within a frame of them; `-mic-delay` moves A/V by it, losing nothing | pick the camera and allow it; drag, scroll, pinch; switch apps (the light goes off); ⌃⌥R from another app; a display and an area recording with the bubble; clap on camera (lips meet the voice); the camera stats in `app.log`; unplug a camera mid-recording; switch Spaces and go full screen mid-recording |
 
 **Execution:**
 - M0 → M1 run in sequence on main.
