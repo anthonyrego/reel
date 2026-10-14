@@ -11,6 +11,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"syscall"
+	"unsafe"
 
 	"github.com/Zyko0/go-sdl3/bin/binsdl"
 	"github.com/Zyko0/go-sdl3/sdl"
@@ -109,29 +110,61 @@ func QuitOnSignal() {
 	}()
 }
 
-// wakePending merges wakes: while one EVENT_USER is queued and not yet taken
-// by the loop, further Wake calls push nothing. Watchers publish a snapshot
-// and then wake, so one pending event covers any number of publishes.
-var wakePending atomic.Bool
+// waker merges wakes: while its EVENT_USER is queued and not yet taken by
+// the loop, further wakes push nothing. Watchers publish a snapshot and then
+// wake, so one pending event covers any number of publishes.
+type waker struct {
+	pending atomic.Bool
+	code    int32
+}
 
-// pushWake queues the EVENT_USER. A variable so tests can run without SDL.
-var pushWake = func() error { return sdl.PushEvent(&sdl.Event{Type: sdl.EVENT_USER}) }
+// The wakes, told apart by their EVENT_USER code: state for every window,
+// and a camera frame for the window that shows it.
+var (
+	stateWake = waker{code: WakeState}
+	frameWake = waker{code: WakeFrame}
+)
 
-// Wake wakes the main loop from any goroutine. Wakes are merged through an
-// atomic flag, so a watcher that publishes many snapshots between frames
-// queues one event, not one per publish.
-func Wake() error {
-	if !wakePending.CompareAndSwap(false, true) {
+// EVENT_USER codes.
+const (
+	WakeState int32 = iota // Wake: new state for every window
+	WakeFrame              // WakeForFrame: a new camera frame, for its window only
+)
+
+// pushWake queues an EVENT_USER with a code. A variable so tests can run
+// without SDL.
+var pushWake = func(code int32) error {
+	var ev sdl.Event
+	u := (*sdl.UserEvent)(unsafe.Pointer(&ev))
+	u.Type, u.Code = uint32(sdl.EVENT_USER), code
+	return sdl.PushEvent(&ev)
+}
+
+func (w *waker) wake() error {
+	if !w.pending.CompareAndSwap(false, true) {
 		return nil
 	}
-	if err := pushWake(); err != nil {
-		wakePending.Store(false)
+	if err := pushWake(w.code); err != nil {
+		w.pending.Store(false)
 		return err
 	}
 	return nil
 }
 
+// Wake wakes the main loop from any goroutine. Wakes are merged through an
+// atomic flag, so a watcher that publishes many snapshots between frames
+// queues one event, not one per publish.
+func Wake() error { return stateWake.wake() }
+
 // WakeTaken tells Wake that the loop has taken the pending EVENT_USER. Call
 // it before reading the state the wake announced: a publish that lands after
 // this call queues a fresh event, so it is never lost.
-func WakeTaken() { wakePending.Store(false) }
+func WakeTaken() { stateWake.pending.Store(false) }
+
+// WakeForFrame wakes the main loop for a new camera frame: merged like
+// Wake, but on its own, so the loop redraws only the window that shows the
+// camera instead of every window 30 times a second.
+func WakeForFrame() error { return frameWake.wake() }
+
+// FrameTaken is WakeTaken for WakeForFrame.
+func FrameTaken() { frameWake.pending.Store(false) }

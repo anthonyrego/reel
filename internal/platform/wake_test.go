@@ -9,8 +9,8 @@ import (
 
 func TestWakeMergesUntilTaken(t *testing.T) {
 	var pushed atomic.Int32
-	defer func(old func() error) { pushWake = old; wakePending.Store(false) }(pushWake)
-	pushWake = func() error { pushed.Add(1); return nil }
+	defer func(old func(int32) error) { pushWake = old; WakeTaken() }(pushWake)
+	pushWake = func(int32) error { pushed.Add(1); return nil }
 
 	var wg sync.WaitGroup
 	for range 64 {
@@ -31,10 +31,10 @@ func TestWakeMergesUntilTaken(t *testing.T) {
 }
 
 func TestWakeRetriesAfterPushFailure(t *testing.T) {
-	defer func(old func() error) { pushWake = old; wakePending.Store(false) }(pushWake)
+	defer func(old func(int32) error) { pushWake = old; WakeTaken() }(pushWake)
 	fail := true
 	var pushed int
-	pushWake = func() error {
+	pushWake = func(int32) error {
 		pushed++
 		if fail {
 			return errors.New("queue full")
@@ -47,5 +47,25 @@ func TestWakeRetriesAfterPushFailure(t *testing.T) {
 	fail = false
 	if err := Wake(); err != nil || pushed != 2 {
 		t.Fatalf("second wake: err=%v pushed=%d, want a retry", err, pushed)
+	}
+}
+
+func TestWakesMergeApart(t *testing.T) {
+	defer func(old func(int32) error) { pushWake = old; WakeTaken(); FrameTaken() }(pushWake)
+	var codes []int32
+	pushWake = func(code int32) error { codes = append(codes, code); return nil }
+
+	WakeForFrame()
+	WakeForFrame()
+	Wake()
+	Wake()
+	if len(codes) != 2 || codes[0] != WakeFrame || codes[1] != WakeState {
+		t.Fatalf("pushed %v, want one frame wake then one state wake", codes)
+	}
+	FrameTaken() // a frame taken leaves the state wake pending
+	Wake()
+	WakeForFrame()
+	if len(codes) != 3 || codes[2] != WakeFrame {
+		t.Fatalf("after FrameTaken, pushed %v, want a second frame wake only", codes)
 	}
 }

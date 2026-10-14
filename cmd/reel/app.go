@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+	"unsafe"
 
 	"github.com/Zyko0/go-sdl3/sdl"
 
@@ -248,6 +249,8 @@ func (a *winApp) surfaceOf(ev *sdl.Event) *surface {
 		id = ev.KeyboardEvent().WindowID
 	case t == sdl.EVENT_TEXT_INPUT:
 		id = ev.TextInputEvent().WindowID
+	case t == sdl.EVENT_PINCH_BEGIN || t == sdl.EVENT_PINCH_UPDATE || t == sdl.EVENT_PINCH_END:
+		id = (*sdl.PinchFingerEvent)(unsafe.Pointer(ev)).WindowID
 	}
 	for _, s := range a.surfaces {
 		if s.id == id {
@@ -331,6 +334,16 @@ func (a *winApp) run(exitAfter time.Duration) error {
 				}
 				s.onClose()
 			case sdl.EVENT_USER:
+				if ev.UserEvent().Code == platform.WakeFrame {
+					// A camera frame: only the window that shows it redraws.
+					platform.FrameTaken()
+					for _, s := range a.surfaces {
+						if f, ok := s.scene.(interface{ frame() bool }); ok && f.frame() {
+							s.dirty = true
+						}
+					}
+					break
+				}
 				platform.WakeTaken()
 				// A woken scene may open or close windows: walk a copy.
 				for _, s := range append([]*surface(nil), a.surfaces...) {
