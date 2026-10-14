@@ -76,3 +76,48 @@ func TestTruncated(t *testing.T) {
 		t.Error("read a truncated file without an error")
 	}
 }
+
+// elst: version 0 or 1, entries of (segment duration, media time).
+func elst(version byte, edits ...[2]int64) []byte {
+	b := []byte{version, 0, 0, 0, 0, 0, 0, 0}
+	binary.BigEndian.PutUint32(b[4:], uint32(len(edits)))
+	for _, e := range edits {
+		if version == 1 {
+			b = binary.BigEndian.AppendUint64(b, uint64(e[0]))
+			b = binary.BigEndian.AppendUint64(b, uint64(e[1]))
+		} else {
+			b = binary.BigEndian.AppendUint32(b, uint32(e[0]))
+			b = binary.BigEndian.AppendUint32(b, uint32(int32(e[1])))
+		}
+		b = append(b, 0, 1, 0, 0) // rate 1.0
+	}
+	return box("elst", b)
+}
+
+func TestLead(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		edts []byte
+		want float64
+	}{
+		{"none", nil, 0},
+		{"v0", box("edts", elst(0, [2]int64{3000, 300})), 0.5},
+		{"v1", box("edts", elst(1, [2]int64{3000, 150})), 0.25},
+		{"empty edit first", box("edts", elst(0, [2]int64{100, -1}, [2]int64{3000, 60})), 0.1},
+		{"only empty", box("edts", elst(0, [2]int64{100, -1})), 0},
+	} {
+		parts := [][]byte{box("mdia", durationBox("mdhd", 600, 3000), hdlr("vide"))}
+		if c.edts != nil {
+			parts = append([][]byte{c.edts}, parts...) // edts comes before mdia
+		}
+		file := box("moov", box("trak", parts...))
+		f, err := Read(bytes.NewReader(file), int64(len(file)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		v, _ := f.Track("vide")
+		if v.Lead != c.want || v.Edits != (c.edts != nil) {
+			t.Errorf("%s: lead %v (want %v), edits %v", c.name, v.Lead, c.want, v.Edits)
+		}
+	}
+}

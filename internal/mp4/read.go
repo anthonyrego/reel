@@ -25,8 +25,12 @@ type Track struct {
 	Handler  string  // "vide", "soun"
 	Duration float64 // the media's own (mdhd), seconds
 	Edits    bool    // has an edit list (edts): players trim or shift it
-	Width    float64 // tkhd, for video
-	Height   float64
+	// Lead is where the edit list starts playing the media, in seconds:
+	// what a player that ignores edit lists shows first (AAC's priming; a
+	// trim's frames from the keyframe before its start).
+	Lead   float64
+	Width  float64 // tkhd, for video
+	Height float64
 }
 
 // FastStart reports whether moov comes before mdat, so a player (Slack,
@@ -162,10 +166,18 @@ func (f *File) moov(b []byte) error {
 
 func trak(b []byte) (Track, error) {
 	var t Track
+	var lead int64   // in the media's timescale, which mdhd (after edts) gives
+	var scale uint32 // the media's
 	err := children(b, func(typ string, body []byte) error {
 		switch typ {
 		case "edts":
 			t.Edits = true
+			return children(body, func(typ string, body []byte) error {
+				if typ == "elst" {
+					lead = firstEdit(body)
+				}
+				return nil
+			})
 		case "tkhd":
 			// version, flags, then times and ids; width and height are the
 			// last 8 bytes, 16.16 fixed point.
@@ -178,6 +190,7 @@ func trak(b []byte) (Track, error) {
 				switch typ {
 				case "mdhd":
 					t.Duration = fullDuration(body)
+					scale, _ = fullTimes(body)
 				case "hdlr":
 					if len(body) >= 12 {
 						t.Handler = string(body[8:12])
@@ -188,33 +201,60 @@ func trak(b []byte) (Track, error) {
 		}
 		return nil
 	})
+	if scale != 0 {
+		t.Lead = float64(lead) / float64(scale)
+	}
 	return t, err
+}
+
+// firstEdit reads an elst body: the media time its first edit that plays
+// media starts at (an empty edit, -1, is a delay before it).
+func firstEdit(b []byte) int64 {
+	if len(b) < 8 {
+		return 0
+	}
+	// Each entry: segment duration, media time, rate (16.16); version 1
+	// has 64-bit times.
+	size, wide := 12, b[0] == 1
+	if wide {
+		size = 20
+	}
+	n, b := binary.BigEndian.Uint32(b[4:8]), b[8:]
+	for ; n > 0 && len(b) >= size; n, b = n-1, b[size:] {
+		at := int64(int32(binary.BigEndian.Uint32(b[4:8])))
+		if wide {
+			at = int64(binary.BigEndian.Uint64(b[8:16]))
+		}
+		if at >= 0 {
+			return at
+		}
+	}
+	return 0
 }
 
 // fullDuration reads timescale and duration from an mvhd or mdhd body,
 // in seconds.
 func fullDuration(b []byte) float64 {
-	if len(b) < 4 {
-		return 0
-	}
-	if b[0] == 1 { // version 1: 64-bit times
-		if len(b) < 32 {
-			return 0
-		}
-		scale := binary.BigEndian.Uint32(b[20:24])
-		dur := binary.BigEndian.Uint64(b[24:32])
-		if scale == 0 {
-			return 0
-		}
-		return float64(dur) / float64(scale)
-	}
-	if len(b) < 20 {
-		return 0
-	}
-	scale := binary.BigEndian.Uint32(b[12:16])
-	dur := binary.BigEndian.Uint32(b[16:20])
+	scale, dur := fullTimes(b)
 	if scale == 0 {
 		return 0
 	}
 	return float64(dur) / float64(scale)
+}
+
+// fullTimes reads the timescale and duration of an mvhd or mdhd body.
+func fullTimes(b []byte) (scale uint32, dur uint64) {
+	if len(b) < 4 {
+		return 0, 0
+	}
+	if b[0] == 1 { // version 1: 64-bit times
+		if len(b) < 32 {
+			return 0, 0
+		}
+		return binary.BigEndian.Uint32(b[20:24]), binary.BigEndian.Uint64(b[24:32])
+	}
+	if len(b) < 20 {
+		return 0, 0
+	}
+	return binary.BigEndian.Uint32(b[12:16]), uint64(binary.BigEndian.Uint32(b[16:20]))
 }
