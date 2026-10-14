@@ -71,6 +71,32 @@ func NewPath(dir string, t time.Time) string {
 	return path
 }
 
+// TrimmedPath is a path for a trimmed copy of the recording at src, next
+// to it: "Recording … trimmed.mp4", with a number added if that's taken.
+// A copy of a trimmed copy is numbered, not trimmed twice.
+func TrimmedPath(src string) string {
+	dir, name := filepath.Split(src)
+	base := strings.TrimSuffix(name, filepath.Ext(name))
+	if i := strings.LastIndex(base, " trimmed"); i >= 0 && allDigits(strings.TrimPrefix(base[i+len(" trimmed"):], " ")) {
+		base = base[:i]
+	}
+	base += " trimmed"
+	path := filepath.Join(dir, base+".mp4")
+	for i := 2; exists(path); i++ {
+		path = filepath.Join(dir, base+" "+itoa(i)+".mp4")
+	}
+	return path
+}
+
+func allDigits(s string) bool {
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
 func exists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil

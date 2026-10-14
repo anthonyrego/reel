@@ -68,3 +68,27 @@ func TestNewPath(t *testing.T) {
 		t.Errorf("%s", p2)
 	}
 }
+
+func TestTrimmedPath(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "Recording 2026-10-13 at 15.04.05.mp4")
+	p := TrimmedPath(src)
+	if filepath.Base(p) != "Recording 2026-10-13 at 15.04.05 trimmed.mp4" {
+		t.Errorf("%s", p)
+	}
+	os.WriteFile(p, nil, 0o644)
+	p2 := TrimmedPath(src)
+	if filepath.Base(p2) != "Recording 2026-10-13 at 15.04.05 trimmed 2.mp4" {
+		t.Errorf("%s", p2)
+	}
+	os.WriteFile(p2, nil, 0o644)
+	// Trimming a trimmed copy numbers it.
+	for _, from := range []string{p, p2} {
+		if got := filepath.Base(TrimmedPath(from)); got != "Recording 2026-10-13 at 15.04.05 trimmed 3.mp4" {
+			t.Errorf("from %s: %s", filepath.Base(from), got)
+		}
+	}
+	if got := filepath.Base(TrimmedPath(filepath.Join(dir, "untrimmed take.mp4"))); got != "untrimmed take trimmed.mp4" {
+		t.Errorf("%s", got)
+	}
+}
