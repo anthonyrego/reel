@@ -95,8 +95,8 @@ func newTextPipeline() (*text.Shaper, *text.GlyphCache, error) {
 
 // image draws one frame of a scene at w×h logical units and scale pixels
 // per unit.
-func (o *offscreen) image(s scene, w, h, scale float32, pal theme.Palette) (*image.RGBA, error) {
-	c := &ui.Ctx{Text: o.shaper, Pal: pal, Scale: scale, Now: time.Now()}
+func (o *offscreen) image(s scene, w, h, scale float32, pal theme.Palette, now time.Time) (*image.RGBA, error) {
+	c := &ui.Ctx{Text: o.shaper, Pal: pal, Scale: scale, Now: now}
 	var l draw.List
 	s.draw(c, &l, w, h)
 	pw, ph := int(w*scale+0.5), int(h*scale+0.5)
@@ -109,11 +109,11 @@ func (o *offscreen) image(s scene, w, h, scale float32, pal theme.Palette) (*ima
 func runRender(args []string) error {
 	fs := flag.NewFlagSet("render", flag.ContinueOnError)
 	out := fs.String("out", "", "PNG to write (required)")
-	width := fs.Float64("width", 720, "window width, logical units")
+	width := fs.Float64("width", 800, "window width, logical units")
 	height := fs.Float64("height", 640, "window height, logical units")
 	scale := fs.Float64("scale", 2, "pixels per logical unit")
 	state := fs.String("state", "idle", "the main window's sample state: "+sampleNames())
-	hover := fs.String("hover", "", "move the pointer here first: X,Y in logical units")
+	hover := fs.String("hover", "", "move the pointer here first (a tooltip shows): X,Y in logical units")
 	sceneName := fs.String("scene", "home", "what to draw: home (the main window), hud (the floating controls, at -state live or paused), area (the area picker over a made-up desktop), icons (every icon at three sizes) or trim (the trim screen, at -state "+strings.Join(trimStates, ", ")+")")
 	file := fs.String("file", "", "with -scene trim: show this recording's picture (default: a made-up one)")
 	live := fs.Bool("live", false, "draw this Mac's real state (permissions, displays, mics, recordings) through the controller, menus closed")
@@ -154,6 +154,22 @@ func runRender(args []string) error {
 		c.show()
 		menu = ""
 	}
+	if *sceneName == "home" {
+		// The recordings' pictures: made up, or this Mac's (-live).
+		if *live {
+			defer liveThumbs(o, v)()
+		} else {
+			for i := range v.St.Recordings {
+				id := thumbBase + draw.ImageID(i)
+				tex, err := samplePicture(o, id, 600, 375, i+1)
+				if err != nil {
+					return err
+				}
+				defer o.device.ReleaseTexture(tex)
+				v.St.Recordings[i].Thumb = id
+			}
+		}
+	}
 	pal := theme.Dark
 	w, h := float32(*width), float32(*height)
 	c := &ui.Ctx{Text: o.shaper, Pal: pal, Scale: float32(*scale), Now: now}
@@ -161,13 +177,24 @@ func runRender(args []string) error {
 	var scratch draw.List
 	v.Draw(c, &scratch, w, h)
 	v.OpenMenu(menu)
-	if *hover != "" {
-		var x, y float32
-		if _, err := fmt.Sscanf(*hover, "%f,%f", &x, &y); err != nil {
+	at, pointing := draw.Point{}, false
+	switch {
+	case *hover != "":
+		if _, err := fmt.Sscanf(*hover, "%f,%f", &at.X, &at.Y); err != nil {
 			return fmt.Errorf("-hover %q: want X,Y", *hover)
 		}
-		v.Draw(c, &scratch, w, h)
-		v.Event(c, ui.Event{Kind: ui.PointerMove, Pos: draw.Point{X: x, Y: y}})
+		pointing = true
+	case *state == "hover-card" && len(v.St.Recordings) > 0:
+		// On the first card's Trim, its tooltip showing.
+		card, _ := v.Card(v.St.Recordings[0].Path)
+		at, pointing = draw.Point{X: card.Right() - 8 - 2*34 - 22, Y: card.Y + 8 + 14}, true
+	case *state == "delete" && len(v.St.Recordings) > 0:
+		v.AskDelete(v.St.Recordings[0].Path)
+	}
+	if pointing {
+		v.Event(c, ui.Event{Kind: ui.PointerMove, Pos: at})
+		v.Draw(c, &scratch, w, h) // the tooltip's wait starts now
+		now = now.Add(time.Second)
 	}
 	var sc scene = &homeScene{v: v}
 	switch *sceneName {
@@ -199,7 +226,7 @@ func runRender(args []string) error {
 	default:
 		return fmt.Errorf("-scene %q: home, hud, area, trim or icons", *sceneName)
 	}
-	img, err := o.image(sc, w, h, float32(*scale), pal)
+	img, err := o.image(sc, w, h, float32(*scale), pal, now)
 	if err != nil {
 		return err
 	}
@@ -222,12 +249,28 @@ func writePNG(path string, img image.Image) error {
 // window-like cards) as image id: the area picker's still, a recording's
 // picture.
 func sampleDesktop(o *offscreen, id draw.ImageID, pw, ph int) (*sdl.GPUTexture, error) {
+	return samplePicture(o, id, pw, ph, 0)
+}
+
+// samplePicture is sampleDesktop in one of a few looks (seed), for the
+// recordings' cards.
+func samplePicture(o *offscreen, id draw.ImageID, pw, ph, seed int) (*sdl.GPUTexture, error) {
+	bases := [][3]int{{40, 70, 150}, {110, 50, 90}, {30, 100, 100}, {140, 90, 40}, {70, 50, 140}, {50, 60, 70}}
+	layouts := [][][4]int{
+		{{pw / 10, ph / 8, pw / 2, ph / 2}, {pw / 2, ph / 3, pw * 9 / 10, ph * 5 / 6}},
+		{{pw / 8, ph / 10, pw * 7 / 8, ph * 9 / 10}},
+		{{pw / 14, ph / 6, pw * 13 / 28, ph * 5 / 6}, {pw * 15 / 28, ph / 6, pw * 13 / 14, ph * 5 / 6}},
+		{{pw / 5, ph / 5, pw * 4 / 5, ph * 3 / 4}},
+		{{pw / 12, ph / 12, pw * 2 / 3, ph * 2 / 3}, {pw / 3, ph / 2, pw * 11 / 12, ph * 11 / 12}},
+		{{pw / 4, ph / 8, pw * 3 / 4, ph * 7 / 8}},
+	}
+	base, cards := bases[seed%len(bases)], layouts[seed%len(layouts)]
 	pix := make([]byte, pw*ph*4)
 	for y := range ph {
 		for x := range pw {
 			i := (y*pw + x) * 4
-			pix[i], pix[i+1], pix[i+2], pix[i+3] = byte(40+60*x/pw), byte(70+80*y/ph), byte(150+60*x/pw), 255
-			for _, r := range [][4]int{{pw / 10, ph / 8, pw / 2, ph / 2}, {pw / 2, ph / 3, pw * 9 / 10, ph * 5 / 6}} {
+			pix[i], pix[i+1], pix[i+2], pix[i+3] = byte(base[0]+60*x/pw), byte(base[1]+80*y/ph), byte(base[2]+60*x/pw), 255
+			for _, r := range cards {
 				if x >= r[0] && x < r[2] && y >= r[1] && y < r[3] {
 					pix[i], pix[i+1], pix[i+2] = 245, 245, 247
 					if y < r[1]+ph/30 {

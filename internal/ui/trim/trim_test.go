@@ -16,7 +16,7 @@ func ctx(t *testing.T) *ui.Ctx {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &ui.Ctx{Text: s, Pal: theme.For(false), Scale: 2, Now: time.Now()}
+	return &ui.Ctx{Text: s, Pal: theme.Dark, Scale: 2, Now: time.Now()}
 }
 
 // rig is a view of a 10 s recording with every action noted.

@@ -13,10 +13,15 @@ type homeScene struct {
 	woken func()
 	// focused, when set, runs when the window gains focus.
 	focused func()
+	// drew, when set, hears the recordings drawn each frame.
+	drew func(visible []string)
 }
 
 func (s *homeScene) draw(c *ui.Ctx, l *draw.List, w, h float32) {
 	s.v.Draw(c, l, w, h)
+	if s.drew != nil {
+		s.drew(s.v.Visible())
+	}
 	if s.v.Animating(c.Now) {
 		c.RequestFrame()
 	}

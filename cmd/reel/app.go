@@ -125,7 +125,9 @@ func runApp(args []string) error {
 
 	v := home.New()
 	c := newController(paths, v)
-	a.setScene(&homeScene{v: v, woken: c.woke, focused: c.refresh})
+	c.thumbs = newThumbs(a.device, a.renderer, c.post)
+	defer c.thumbs.close()
+	a.setScene(&homeScene{v: v, woken: c.woke, focused: c.refresh, drew: c.drew})
 	hud := newHUD(a, c)
 	c.onLive = hud.live
 	c.selectArea = func() { selectArea(a, c) }

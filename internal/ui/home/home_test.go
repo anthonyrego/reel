@@ -17,7 +17,7 @@ func ctx(t *testing.T) *ui.Ctx {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &ui.Ctx{Text: s, Pal: theme.For(false), Scale: 2, Now: time.Now()}
+	return &ui.Ctx{Text: s, Pal: theme.Dark, Scale: 2, Now: time.Now()}
 }
 
 func state() State {
@@ -31,7 +31,8 @@ func state() State {
 	}
 }
 
-// clickAll clicks the middle of every control drawn, redrawing between
+// clickAll clicks the middle of every control drawn, with the pointer
+// over each card in turn (its buttons show only then), redrawing between
 // clicks, and returns what ran.
 func clickAll(t *testing.T, v *View) map[string]int {
 	t.Helper()
@@ -51,18 +52,31 @@ func clickAll(t *testing.T, v *View) map[string]int {
 		Trim:           func(string) { ran["trim"]++ },
 	}
 	var l draw.List
-	v.Draw(c, &l, 720, 640)
-	for _, r := range v.hits.Rects() {
-		if r.W > 1e4 {
-			continue // a menu's backdrop
+	draw1 := func() { l.Reset(); v.Draw(c, &l, 720, 640) }
+	draw1()
+	hovers := []draw.Point{{X: 1, Y: 1}} // off every card
+	for _, r := range v.St.Recordings {
+		if card, ok := v.Card(r.Path); ok {
+			hovers = append(hovers, draw.Point{X: card.X + 4, Y: card.Bottom() - 4})
 		}
-		p := draw.Point{X: r.X + r.W/2, Y: r.Y + r.H/2}
-		v.Event(c, ui.Event{Kind: ui.PointerMove, Pos: p})
-		v.Event(c, ui.Event{Kind: ui.PointerDown, Pos: p, Button: 1})
-		v.Event(c, ui.Event{Kind: ui.PointerUp, Pos: p, Button: 1})
-		l.Reset()
-		v.Draw(c, &l, 720, 640)
-		v.menu, v.confirm = "", ""
+	}
+	seen := map[draw.Rect]bool{}
+	for _, at := range hovers {
+		v.Event(c, ui.Event{Kind: ui.PointerMove, Pos: at})
+		draw1()
+		for _, r := range v.hits.Rects() {
+			if r.W > 1e4 || seen[r] {
+				continue // a menu's backdrop, or clicked already
+			}
+			seen[r] = true
+			p := draw.Point{X: r.X + r.W/2, Y: r.Y + r.H/2}
+			v.Event(c, ui.Event{Kind: ui.PointerMove, Pos: p})
+			v.Event(c, ui.Event{Kind: ui.PointerDown, Pos: p, Button: 1})
+			v.Event(c, ui.Event{Kind: ui.PointerUp, Pos: p, Button: 1})
+			v.menu, v.confirm = "", ""
+			v.Event(c, ui.Event{Kind: ui.PointerMove, Pos: at})
+			draw1()
+		}
 	}
 	return ran
 }
@@ -84,60 +98,97 @@ func TestLiveShowsPauseAndStop(t *testing.T) {
 	v.St = state()
 	v.St.Live = &Live{Elapsed: time.Minute}
 	ran := clickAll(t, v)
-	if ran["pause"] != 1 || ran["stop"] != 1 || ran["record"] != 0 || ran["target"] != 0 {
+	if ran["pause"] != 1 || ran["stop"] != 1 || ran["record"] != 0 || ran["target"] != 0 || ran["systemAudio"] != 0 {
 		t.Errorf("%v", ran)
 	}
 }
 
-// Delete asks again before it runs.
+// Every control in the bar and on a card does its one thing; a click on
+// the card itself copies it.
+func TestEveryControl(t *testing.T) {
+	v := New()
+	v.St = state()
+	ran := clickAll(t, v)
+	for _, name := range []string{"record", "systemAudio", "folder", "trim", "reveal"} {
+		if ran[name] != 1 {
+			t.Errorf("%s ran %d times: %v", name, ran[name], ran)
+		}
+	}
+	// The mode's other two choices; Copy's button and the card itself.
+	if ran["target"] != 2 || ran["copy"] != 2 {
+		t.Errorf("%v", ran)
+	}
+	if ran["delete"] != 0 {
+		t.Error("Delete didn't ask first")
+	}
+}
+
+// Delete asks again (over the card's picture) before it runs.
 func TestDeleteAsks(t *testing.T) {
 	v := New()
 	v.St = state()
 	c := ctx(t)
 	deleted := ""
-	v.Act = Actions{Delete: func(p string) { deleted = p }}
+	v.Act = Actions{Delete: func(p string) { deleted = p }, Copy: func(string) {}}
 	var l draw.List
-	click := func(label string) bool {
-		v.Draw(c, &l, 720, 640)
-		// Hover the row so its quiet buttons are drawn.
-		row := draw.Point{X: 100, Y: v.listTop + 20}
-		v.Event(c, ui.Event{Kind: ui.PointerMove, Pos: row})
-		l.Reset()
-		v.Draw(c, &l, 720, 640)
-		for _, r := range v.hits.Rects() {
-			if r.Y < v.listTop || r.W > 300 {
-				continue
-			}
-			p := draw.Point{X: r.X + r.W/2, Y: r.Y + r.H/2}
-			v.Event(c, ui.Event{Kind: ui.PointerDown, Pos: p, Button: 1})
-			v.Event(c, ui.Event{Kind: ui.PointerUp, Pos: p, Button: 1})
-			if v.confirm != "" || deleted != "" {
-				return true
-			}
-		}
-		return false
+	v.Draw(c, &l, 720, 640)
+	card, ok := v.Card("/a.mp4")
+	if !ok {
+		t.Fatal("the card isn't drawn")
 	}
-	if !click("Delete") || deleted != "" || v.confirm != "/a.mp4" {
-		t.Fatalf("first click: confirm %q deleted %q", v.confirm, deleted)
-	}
-	// Now the row shows Delete (danger) and Keep; Delete is the rightmost.
+	at := draw.Point{X: card.X + 4, Y: card.Bottom() - 4}
+	v.Event(c, ui.Event{Kind: ui.PointerMove, Pos: at})
 	l.Reset()
 	v.Draw(c, &l, 720, 640)
-	var rects []draw.Rect
-	for _, r := range v.hits.Rects() {
-		if r.Y >= v.listTop && r.W < 300 {
-			rects = append(rects, r)
-		}
+	click := func(p draw.Point) {
+		v.Event(c, ui.Event{Kind: ui.PointerMove, Pos: p})
+		v.Event(c, ui.Event{Kind: ui.PointerDown, Pos: p, Button: 1})
+		v.Event(c, ui.Event{Kind: ui.PointerUp, Pos: p, Button: 1})
+		l.Reset()
+		v.Draw(c, &l, 720, 640)
 	}
-	if len(rects) < 2 {
-		t.Fatalf("%d buttons on the row", len(rects))
+	// The trash is the rightmost button over the picture.
+	click(draw.Point{X: card.Right() - 8 - 14, Y: card.Y + 8 + 14})
+	if deleted != "" || v.confirm != "/a.mp4" {
+		t.Fatalf("first click: confirm %q deleted %q", v.confirm, deleted)
 	}
-	del := rects[0]
-	p := draw.Point{X: del.X + del.W/2, Y: del.Y + del.H/2}
-	v.Event(c, ui.Event{Kind: ui.PointerDown, Pos: p, Button: 1})
-	v.Event(c, ui.Event{Kind: ui.PointerUp, Pos: p, Button: 1})
+	// Now Keep and Delete; Delete is the last drawn.
+	rects := v.hits.Rects()
+	del := rects[len(rects)-1]
+	click(draw.Point{X: del.X + del.W/2, Y: del.Y + del.H/2})
 	if deleted != "/a.mp4" {
 		t.Errorf("deleted %q", deleted)
+	}
+}
+
+// The cards fill the width: two at the narrowest, more as it grows.
+func TestColumns(t *testing.T) {
+	for _, tc := range []struct {
+		w    float32
+		want int
+	}{{400, 2}, {640, 2}, {720, 3}, {800, 3}, {1200, 5}} {
+		if got := Columns(tc.w); got != tc.want {
+			t.Errorf("Columns(%v) = %d, want %d", tc.w, got, tc.want)
+		}
+	}
+}
+
+// A card says when reel's recordings were made (and that a trim is one),
+// and anything renamed by its name.
+func TestTitle(t *testing.T) {
+	now := time.Date(2026, 10, 13, 22, 30, 0, 0, time.Local)
+	at := time.Date(2026, 10, 13, 22, 4, 2, 0, time.Local)
+	for name, want := range map[string]string{
+		"Recording 2026-10-13 at 22.04.02":           "10:04 PM",
+		"Recording 2026-10-13 at 22.04.02 2":         "10:04 PM",
+		"Recording 2026-10-13 at 22.04.02 trimmed":   "10:04 PM · Trimmed",
+		"Recording 2026-10-13 at 22.04.02 trimmed 3": "10:04 PM · Trimmed",
+		"Demo for Sam":                           "Demo for Sam",
+		"Recording 2026-10-13 at 22.04.02 final": "Recording 2026-10-13 at 22.04.02 final",
+	} {
+		if got := Title(Recording{Name: name, When: at}, now); got != want {
+			t.Errorf("%q: %q, want %q", name, got, want)
+		}
 	}
 }
 

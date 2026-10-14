@@ -1,5 +1,5 @@
-// Package controls draws reel's small controls (buttons, a switch, a
-// segmented control, a dropdown) into a draw.List and remembers where each
+// Package controls draws reel's small controls (buttons, icon buttons,
+// chips and their dropdown menus, tooltips) into a draw.List and remembers where each
 // was drawn, so a click finds it. A view draws its controls every frame
 // through a Hits, then hands pointer events to the same Hits. Pure.
 //
@@ -40,9 +40,9 @@ type Hits struct {
 
 	// The open menu: where it is, how far it's scrolled, and whether it
 	// was open last frame (menuWas) and is this one (menuOpen).
-	menuRect           draw.Rect
+	menuRect            draw.Rect
 	menuScroll, menuMax float32
-	menuOpen, menuWas  bool
+	menuOpen, menuWas   bool
 }
 
 type tipKey struct {

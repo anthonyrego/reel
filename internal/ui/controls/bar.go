@@ -74,15 +74,18 @@ func (h *Hits) IconSegmented(c *ui.Ctx, l *draw.List, x, mid, size float32, cur 
 	for i, sg := range segs {
 		r := draw.Rect{X: x + float32(i)*(size+gap), Y: row.Y, W: size, H: size}
 		v := sg.Value
-		o := IconOpts{Color: pal.TextMuted, Size: size * 0.5}
 		if v == cur {
-			o.Fill, o.Color = pal.SurfaceAlt, pal.Text
+			// The choice: filled, and nothing to click (but its tooltip).
+			h.addTip(r, false, nil, sg.Tip)
+			l.Rect(r, pal.SurfaceAlt, draw.Uniform(size/2))
+			col := pal.Text
+			if !enabled {
+				col = pal.TextMuted
+			}
+			sg.Icon(l, r.X+r.W/2, r.Y+r.H/2, size*0.5, col)
+			continue
 		}
-		h.IconButton(c, l, r, sg.Icon, sg.Tip, o, enabled && v != cur, func() { pick(v) })
-		if v == cur && !enabled {
-			// Drawn disabled, but still the choice: keep it legible.
-			sg.Icon(l, r.X+r.W/2, r.Y+r.H/2, o.Size, pal.TextMuted)
-		}
+		h.IconButton(c, l, r, sg.Icon, sg.Tip, IconOpts{Color: pal.TextMuted, Size: size * 0.5}, enabled, func() { pick(v) })
 	}
 	return row
 }
@@ -110,8 +113,8 @@ func (h *Hits) ChipWidth(c *ui.Ctx, icon bool, label, detail string) float32 {
 }
 
 // Chip draws a dropdown in a bar at r: an icon (nil: none), the label (or
-// the placeholder, muted, when label is empty), a muted detail when
-// there's room, and a chevron. A click runs open.
+// the placeholder, muted, when label is empty), a muted detail when it
+// fits whole, and a chevron. A click runs open.
 func (h *Hits) Chip(c *ui.Ctx, l *draw.List, r draw.Rect, icon icons.Icon, label, detail, placeholder, tip string, enabled bool, open func()) {
 	pal := c.Pal
 	if h.addTip(r, enabled, open, tip) {
@@ -133,9 +136,9 @@ func (h *Hits) Chip(c *ui.Ctx, l *draw.List, r draw.Rect, icon icons.Icon, label
 	room := r.Right() - chipPad - chevronW - x
 	lay := h.texts.Lay(c, label, text.SansSemibold, chipLabel)
 	h.texts.PutFit(c, l, label, text.SansSemibold, chipLabel, x, mid-lay.Height/2, room, col)
-	if detail != "" && room-lay.Width-8 >= 48 {
-		d := h.texts.Lay(c, detail, text.SansRegular, 12)
-		h.texts.PutFit(c, l, detail, text.SansRegular, 12, x+lay.Width+8, mid-d.Height/2+0.5, room-lay.Width-8, dcol)
+	if d := h.texts.Lay(c, detail, text.SansRegular, 12); detail != "" && room-lay.Width-8 >= d.Width {
+		// Whole or not at all.
+		Put(l, d, x+lay.Width+8, mid-d.Height/2+0.5, dcol)
 	}
 	icons.ChevronDown(l, r.Right()-chipPad-chevronW/2+4, mid, 14, icol)
 }

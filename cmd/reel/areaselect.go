@@ -22,9 +22,6 @@ import (
 	"github.com/anthonyrego/reel/internal/ui/controls"
 )
 
-// areaImage is the image id the display's still is drawn with.
-const areaImage draw.ImageID = 1
-
 // minArea is the smallest area a drag selects, in points.
 const minArea = 40
 

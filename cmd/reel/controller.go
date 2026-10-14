@@ -45,6 +45,8 @@ type controller struct {
 	selectArea func()
 	// openTrim shows the trim screen for a recording.
 	openTrim func(path string)
+	// thumbs has the recordings' pictures (nil: none, as in renders).
+	thumbs *thumbs
 
 	mu      sync.Mutex
 	pending []func()
@@ -109,6 +111,14 @@ func (c *controller) post(fn func()) {
 	c.pending = append(c.pending, fn)
 	c.mu.Unlock()
 	platform.Wake()
+}
+
+// drew hears which recordings the window drew, so their pictures come
+// first. Main thread.
+func (c *controller) drew(visible []string) {
+	if c.thumbs != nil {
+		c.thumbs.want(c.recs, visible)
+	}
 }
 
 // woke runs what was posted and shows the result. Main thread.
@@ -249,7 +259,7 @@ func (c *controller) show() {
 		st.Live = &home.Live{Elapsed: c.rec.Elapsed(), Paused: paused, Hidden: hidden}
 	}
 	for _, r := range c.recs {
-		st.Recordings = append(st.Recordings, home.Recording{Path: r.Path, Name: r.Name, Duration: r.Duration, Size: r.Size, When: r.When})
+		st.Recordings = append(st.Recordings, home.Recording{Path: r.Path, Name: r.Name, Duration: r.Duration, Size: r.Size, When: r.When, Thumb: c.thumbs.id(r)})
 	}
 	c.v.St = st
 }

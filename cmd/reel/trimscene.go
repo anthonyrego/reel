@@ -25,9 +25,6 @@ import (
 	"github.com/anthonyrego/reel/internal/ui/trim"
 )
 
-// trimImage is the image id the trim screen's picture is drawn with.
-const trimImage draw.ImageID = 2
-
 // maxFrameEdge bounds the picture's long edge, in pixels.
 const maxFrameEdge = 2560
 

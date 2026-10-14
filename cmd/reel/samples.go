@@ -41,6 +41,25 @@ var samples = map[string]func(now time.Time) (home.State, string){
 		s.Screen, s.Mic, s.Recordings = home.PermAsk, home.PermDenied, nil
 		return s, ""
 	},
+	"hover-card": func(now time.Time) (home.State, string) { return sampleIdle(now), "" },
+	"delete":     func(now time.Time) (home.State, string) { return sampleIdle(now), "" },
+	"empty": func(now time.Time) (home.State, string) {
+		s := sampleIdle(now)
+		s.Recordings = nil
+		return s, ""
+	},
+	"error": func(now time.Time) (home.State, string) {
+		s := sampleIdle(now)
+		s.MicID = "BuiltInMicrophoneDevice"
+		s.Warning = "On the speakers, the mic hears the system audio too: wear headphones."
+		s.Error = "The recording stopped by itself (the display was disconnected); what it got is saved."
+		return s, ""
+	},
+	"finishing": func(now time.Time) (home.State, string) {
+		s := sampleIdle(now)
+		s.Finishing = true
+		return s, ""
+	},
 	"copied": func(now time.Time) (home.State, string) {
 		s := sampleIdle(now)
 		s.Copied, s.Toast, s.ToastAt = s.Recordings[0].Path, "Copied: paste it into Slack", now.Add(-time.Second)
@@ -67,6 +86,8 @@ func sampleIdle(now time.Time) home.State {
 			Duration: d, Size: int64(d.Seconds() * 400_000), When: when,
 		})
 	}
+	recs[1].Name += " trimmed"
+	recs[3].Name = "Onboarding walkthrough for the team"
 	return home.State{
 		Target:   home.Display,
 		Displays: []controls.Choice{{ID: "2", Label: "Studio Display", Detail: "3008 × 1692"}, {ID: "1", Label: "Built-in Retina Display", Detail: "1728 × 1117"}},
