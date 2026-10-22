@@ -49,8 +49,9 @@ type controller struct {
 	onLive func(live bool)
 	// selectArea lets the user drag out an area (the app's overlay).
 	selectArea func()
-	// openTrim shows the trim screen for a recording.
-	openTrim func(path string)
+	// openTrim shows the trim screen for a recording, openPlayer the
+	// player screen.
+	openTrim, openPlayer func(path string)
 	// thumbs has the recordings' pictures (nil: none, as in renders).
 	thumbs *thumbs
 	// feed and bub are the camera and its bubble (nil: none, as in
@@ -60,10 +61,13 @@ type controller struct {
 	bub      *bubble
 	fakeCam  bool
 	fakePick string
-	// onTrim reports whether the main window shows the trim screen.
-	onTrim func() bool
+	// offHome reports whether the main window shows another screen than
+	// the list: trimming, playing.
+	offHome func() bool
 	// active: reel is the app in front.
 	active bool
+	// muted: the player plays without sound (kept while reel runs).
+	muted bool
 
 	mu      sync.Mutex
 	pending []func()
@@ -118,6 +122,11 @@ func newController(paths config.Paths, v *home.View) *controller {
 		Trim: shows(c, func(path string) {
 			if c.openTrim != nil {
 				c.openTrim(path)
+			}
+		}),
+		Play: shows(c, func(path string) {
+			if c.openPlayer != nil {
+				c.openPlayer(path)
 			}
 		}),
 	}
@@ -366,7 +375,7 @@ func (c *controller) camWant() camWant {
 		recording: c.rec != nil || c.starting,
 		recCamera: c.recCamera,
 		active:    c.active,
-		home:      c.onTrim == nil || !c.onTrim(),
+		home:      c.offHome == nil || !c.offHome(),
 	}
 }
 

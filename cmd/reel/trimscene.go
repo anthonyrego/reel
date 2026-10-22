@@ -28,7 +28,6 @@ import (
 	"github.com/anthonyrego/reel/internal/mp4"
 	"github.com/anthonyrego/reel/internal/thumb"
 	"github.com/anthonyrego/reel/internal/ui"
-	"github.com/anthonyrego/reel/internal/ui/home"
 	"github.com/anthonyrego/reel/internal/ui/trim"
 )
 
@@ -75,14 +74,8 @@ func openTrim(a *winApp, c *controller, path string) {
 		s.aspect = v.Width / v.Height
 	}
 	name := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
-	title := ""
-	for _, r := range c.recs {
-		if r.Path == path {
-			title = home.Title(home.Recording{Name: r.Name, When: r.When}, time.Now())
-		}
-	}
 	s.v = trim.New(trim.State{
-		Name: name, Title: title,
+		Name: name, Title: c.title(path),
 		Duration: seconds(f.Duration),
 		Width:    v.Width, Height: v.Height,
 	})

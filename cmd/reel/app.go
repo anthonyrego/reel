@@ -96,6 +96,8 @@ func runApp(args []string) error {
 	exitAfter := fs.Duration("exit-after", 0, "quit by itself after this long (unattended runs)")
 	size := fs.String("size", "800x640", "window size in points, WxH")
 	trimFile := fs.String("trim", "", "dev: open on the trim screen for this recording (unattended runs)")
+	playFile := fs.String("play", "", "dev: open on the player screen for this recording, playing (unattended runs)")
+	muted := fs.Bool("muted", false, "dev: the player plays without sound (agents)")
 	fakeCam := fs.Bool("fake-camera", false, "dev: the camera bubble shows a fake camera, as if reel were in front (agents: no camera is opened)")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -142,7 +144,13 @@ func runApp(args []string) error {
 	c.fakeCam = *fakeCam
 	c.bub.keep, c.bub.moved = c.recorded, c.keepBubble
 	c.bub.setLook(lookOf(c.set.Bubble))
-	c.onTrim = func() bool { _, trim := a.main.scene.(*trimScene); return trim }
+	c.offHome = func() bool {
+		switch a.main.scene.(type) {
+		case *trimScene, *playScene:
+			return true
+		}
+		return false
+	}
 	// An agent's run can't bring reel to the front (macOS lets an app
 	// take focus only when the one in front yields it): with the fake
 	// camera, it starts as if it were.
@@ -151,13 +159,24 @@ func runApp(args []string) error {
 		slog.Warn("app: activation notifications", "err", err)
 	}
 	hud := newHUD(a, c)
-	c.onLive = hud.live
+	c.onLive = func(live bool) {
+		// The main window steps aside: what it plays stops.
+		if p, ok := a.main.scene.(*playScene); ok && live {
+			p.pause()
+		}
+		hud.live(live)
+	}
 	c.selectArea = func() { selectArea(a, c) }
 	c.openTrim = func(path string) { openTrim(a, c, path) }
+	c.openPlayer = func(path string) { openPlayer(a, c, path) }
+	c.muted = *muted
 	c.show()
 	c.refresh()
 	if *trimFile != "" {
 		openTrim(a, c, *trimFile)
+	}
+	if *playFile != "" {
+		openPlayer(a, c, *playFile)
 	}
 	if err := platform.OnHotKey(func() { c.post(c.hotKey) }); err != nil {
 		slog.Warn("app: "+platform.HotKeyName+" won't work", "err", err)
@@ -167,6 +186,9 @@ func runApp(args []string) error {
 	}
 	a.window.Handle().Show()
 	err = a.run(*exitAfter)
+	if p, ok := a.main.scene.(*playScene); ok {
+		p.close()
+	}
 	c.quit() // a recording in progress is finished, not lost
 	return err
 }

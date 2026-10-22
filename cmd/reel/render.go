@@ -33,6 +33,7 @@ import (
 	"github.com/anthonyrego/reel/internal/ui/controls"
 	"github.com/anthonyrego/reel/internal/ui/home"
 	"github.com/anthonyrego/reel/internal/ui/icons"
+	"github.com/anthonyrego/reel/internal/ui/player"
 	"github.com/anthonyrego/reel/internal/ui/trim"
 )
 
@@ -115,8 +116,8 @@ func runRender(args []string) error {
 	scale := fs.Float64("scale", 2, "pixels per logical unit")
 	state := fs.String("state", "idle", "the main window's sample state: "+sampleNames())
 	hover := fs.String("hover", "", "move the pointer here first (a tooltip shows): X,Y in logical units")
-	sceneName := fs.String("scene", "home", "what to draw: home (the main window), hud (the floating controls, at -state live or paused), area (the area picker over a made-up desktop), icons (every icon at three sizes), bubble (the camera bubble, at -state "+strings.Join(bubbleStates, ", ")+") or trim (the trim screen, at -state "+strings.Join(trimStates, ", ")+")")
-	file := fs.String("file", "", "with -scene trim: show this recording's picture (default: a made-up one)")
+	sceneName := fs.String("scene", "home", "what to draw: home (the main window), hud (the floating controls, at -state live or paused), area (the area picker over a made-up desktop), icons (every icon at three sizes), bubble (the camera bubble, at -state "+strings.Join(bubbleStates, ", ")+") trim (the trim screen, at -state "+strings.Join(trimStates, ", ")+") or player (the player screen, at -state "+strings.Join(playerStates, ", ")+")")
+	file := fs.String("file", "", "with -scene trim or player: show this recording's picture (default: a made-up one)")
 	live := fs.Bool("live", false, "draw this Mac's real state (permissions, displays, mics, recordings) through the controller, menus closed")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -125,7 +126,7 @@ func runRender(args []string) error {
 		return fmt.Errorf("-out is required")
 	}
 	sample, ok := samples[*state]
-	if !ok && *sceneName != "trim" && *sceneName != "bubble" {
+	if !ok && *sceneName != "trim" && *sceneName != "bubble" && *sceneName != "player" {
 		return fmt.Errorf("-state %q: one of %s", *state, sampleNames())
 	}
 	if !ok {
@@ -189,6 +190,11 @@ func runRender(args []string) error {
 		// On the first card's Trim, its tooltip showing.
 		card, _ := v.Card(v.St.Recordings[0].Path)
 		at, pointing = draw.Point{X: card.Right() - 8 - 2*34 - 22, Y: card.Y + 8 + 14}, true
+	case *state == "hover-play" && len(v.St.Recordings) > 0:
+		// On the first card's Play, its tooltip showing.
+		card, _ := v.Card(v.St.Recordings[0].Path)
+		picH := card.H - 8 - 40
+		at, pointing = draw.Point{X: card.X + card.W/2, Y: card.Y + picH/2}, true
 	case *state == "delete" && len(v.St.Recordings) > 0:
 		v.AskDelete(v.St.Recordings[0].Path)
 	}
@@ -210,6 +216,13 @@ func runRender(args []string) error {
 		}
 		defer release()
 		sc = ts
+	case "player":
+		ps, release, err := samplePlayer(o, *file, *state, w, h, float32(*scale))
+		if err != nil {
+			return err
+		}
+		defer release()
+		sc = ps
 	case "area":
 		tex, err := sampleDesktop(o, areaImage, int(w*float32(*scale)), int(h*float32(*scale)))
 		if err != nil {
@@ -245,7 +258,7 @@ func runRender(args []string) error {
 		pal.Background = draw.RGB(0x6a7f9a) // a desktop to float over
 	case "home":
 	default:
-		return fmt.Errorf("-scene %q: home, hud, area, trim, bubble or icons", *sceneName)
+		return fmt.Errorf("-scene %q: home, hud, area, trim, player, bubble or icons", *sceneName)
 	}
 	img, err := o.image(sc, w, h, float32(*scale), pal, now)
 	if err != nil {
@@ -408,6 +421,105 @@ func sampleTrim(o *offscreen, file, state string, w, h, scale float32) (scene, f
 		release = func() { releaseStrip(); o.renderer.SetImage(trimImage, nil); o.device.ReleaseTexture(tex) }
 	}
 	return &trimScene{v: v}, release, nil
+}
+
+// playerStates are the player screen's sample states.
+var playerStates = []string{"idle", "paused", "scrub", "muted", "loading", "error", "copy-error"}
+
+// samplePlayer is the player screen w×h at scale in a sample state, over a
+// made-up picture or, with file, that recording's frame a quarter in,
+// taken the way the app takes it (mac.Player, BGRA, at the picture's size).
+func samplePlayer(o *offscreen, file, state string, w, h, scale float32) (scene, func(), error) {
+	if !slices.Contains(playerStates, state) {
+		return nil, nil, fmt.Errorf("-state %q: with -scene player, one of %s", state, strings.Join(playerStates, ", "))
+	}
+	st := player.State{Name: "Recording 2026-10-13 at 15.04.05", Title: "3:04 PM", Duration: 47300 * time.Millisecond, Width: 1600, Height: 1000,
+		Time: 12400 * time.Millisecond, Playing: true}
+	var native [2]int
+	if file != "" {
+		f, err := mp4.ReadFile(file)
+		if err != nil {
+			return nil, nil, err
+		}
+		v, _ := f.Track("vide")
+		st.Name = strings.TrimSuffix(filepath.Base(file), filepath.Ext(file))
+		st.Title = ""
+		st.Duration, st.Width, st.Height = seconds(f.Duration), v.Width, v.Height
+		st.Time = st.Duration / 4
+		native = [2]int{int(v.Width), int(v.Height)}
+	}
+	v := player.New(st)
+	// Actions that do nothing, so every control is drawn enabled.
+	nop := func() {}
+	v.Act = player.Actions{Play: nop, Pause: nop, Seek: func(time.Duration, bool) {}, SetMuted: func(bool) {}, Copy: nop, Trim: nop, Reveal: nop, Back: nop}
+	ctx := &ui.Ctx{Text: o.shaper, Pal: theme.Dark, Scale: scale, Now: time.Now()}
+	var l draw.List
+	v.Draw(ctx, &l, w, h)
+	switch state {
+	case "paused":
+		v.St.Playing = false
+	case "scrub":
+		v.St.Playing = false
+		bar := v.Bar()
+		v.Hover(draw.Point{X: bar.X + bar.W*0.62, Y: bar.Y + bar.H/2})
+	case "muted":
+		v.St.Muted, v.St.Copied = true, true
+	case "error":
+		v.St.Error = "Couldn't play it: The file couldn't be opened."
+	case "copy-error":
+		v.St.Playing, v.St.Error = false, "Couldn't copy it: the pasteboard refused it"
+	}
+	ps := &playScene{v: v, device: o.device, renderer: o.renderer, native: native}
+	if state == "loading" || state == "error" {
+		return ps, func() {}, nil
+	}
+	if file == "" {
+		tex, err := samplePicture(o, playerImage, 1600, 1000, 1)
+		if err != nil {
+			return nil, nil, err
+		}
+		v.St.Frame = playerImage
+		return ps, func() { o.renderer.SetImage(playerImage, nil); o.device.ReleaseTexture(tex) }, nil
+	}
+	if err := sampleFrame(ps, file, st.Time, scale); err != nil {
+		return nil, nil, err
+	}
+	v.St.Frame = playerImage
+	return ps, ps.release, nil
+}
+
+// sampleFrame puts the frame at t of the recording at path in ps's
+// texture, as the app would show it: mac.Player's, at the picture's size.
+// SDL's events are pumped meanwhile, which runs the main run loop, where
+// AVPlayer says what it's doing.
+func sampleFrame(ps *playScene, path string, t time.Duration, scale float32) error {
+	p, err := mac.OpenPlayer(path)
+	if err != nil {
+		return err
+	}
+	defer p.Close()
+	ps.p = p
+	defer func() { ps.p = nil }() // drawn as a render: nothing to sync
+	p.SetMuted(true)
+	ps.size(ps.v.Picture(), scale)
+	wait := func(what string, done func() (bool, error)) error {
+		for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
+			sdl.PumpEvents()
+			if ok, err := done(); ok || err != nil {
+				return err
+			}
+		}
+		return fmt.Errorf("render: %s took over 5 s", what)
+	}
+	if err := wait("opening it", p.Ready); err != nil {
+		return err
+	}
+	p.Seek(t, true)
+	var upErr error
+	return wait("its frame", func() (bool, error) {
+		_, ok := p.Frame(mac.HostTime().Seconds(), func(pix []byte, w, h, stride int) { upErr = ps.upload(pix, w, h, stride) })
+		return ok, upErr
+	})
 }
 
 // iconSheet draws every icon at three sizes, with its name.
