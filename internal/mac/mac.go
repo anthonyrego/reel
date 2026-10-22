@@ -72,6 +72,14 @@ var selectors = map[string][]string{
 		"setRequestedTimeToleranceAfter:", "setMaximumSize:", "generateCGImageAsynchronouslyForTime:completionHandler:",
 		"cancelAllCGImageGeneration"},
 
+	"+AVPlayerItem": {"playerItemWithURL:"},
+	"AVPlayerItem":  {"status", "error", "duration", "addOutput:", "removeOutput:"},
+	"+AVPlayer":     {"playerWithPlayerItem:"},
+	"AVPlayer": {"play", "pause", "rate", "timeControlStatus", "currentTime", "seekToTime:toleranceBefore:toleranceAfter:",
+		"setMuted:"},
+	"AVPlayerItemVideoOutput": {"initWithPixelBufferAttributes:", "itemTimeForHostTime:", "hasNewPixelBufferForItemTime:",
+		"copyPixelBufferForItemTime:itemTimeForDisplay:"},
+
 	"+AVCaptureDeviceDiscoverySession": {"discoverySessionWithDeviceTypes:mediaType:position:"},
 	"AVCaptureDeviceDiscoverySession":  {"devices"},
 	"+AVCaptureDevice":                 {"defaultDeviceWithMediaType:", "authorizationStatusForMediaType:", "requestAccessForMediaType:completionHandler:", "deviceWithUniqueID:"},
@@ -145,7 +153,7 @@ var constants = map[string][]string{
 	avfAudioPath:         {"AVFormatIDKey", "AVSampleRateKey", "AVNumberOfChannelsKey", "AVEncoderBitRateKey"},
 	screenCaptureKitPath: {"SCStreamFrameInfoStatus"},
 	appKitPath:           {"NSApplicationDidBecomeActiveNotification", "NSApplicationDidResignActiveNotification"},
-	coreVideoPath:        {"kCVPixelBufferPixelFormatTypeKey"},
+	coreVideoPath:        {"kCVPixelBufferPixelFormatTypeKey", "kCVPixelBufferWidthKey", "kCVPixelBufferHeightKey"},
 }
 
 // protocols are the Objective-C protocols reel's classes conform to, by
@@ -218,6 +226,9 @@ func loadOnce() error {
 		return fmt.Errorf("mac: %w", err)
 	}
 	if err := loadScreenshot(); err != nil {
+		return fmt.Errorf("mac: %w", err)
+	}
+	if err := loadPlayer(); err != nil {
 		return fmt.Errorf("mac: %w", err)
 	}
 	lib.consts = map[string]objc.ID{}

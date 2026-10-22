@@ -303,20 +303,7 @@ func (s Sample) Image() (w, h int, format string, ok bool) {
 // fn) for a frame with no pixels or in another format.
 func (s Sample) Pixels(fn func(pix []byte, w, h, stride int)) bool {
 	pb := cm.imageBuffer(s.buf)
-	if pb == 0 || cm.pixelFormat(pb) != pixelBGRA || cm.isPlanar(pb) {
-		return false
-	}
-	if cm.lockBase(pb, pixelLockReadOnly) != 0 {
-		return false
-	}
-	defer cm.unlock(pb, pixelLockReadOnly)
-	w, h, stride := int(cm.pixelWidth(pb)), int(cm.height(pb)), int(cm.bytesPerRow(pb))
-	base := cm.baseAddress(pb)
-	if base == nil || w <= 0 || h <= 0 || stride < w*4 {
-		return false
-	}
-	fn(unsafe.Slice((*byte)(base), (h-1)*stride+w*4), w, h, stride)
-	return true
+	return pb != 0 && pixels(pb, fn)
 }
 
 // AudioFormat is an audio sample's format; ok is false for other samples.
