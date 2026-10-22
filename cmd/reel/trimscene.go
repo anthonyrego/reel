@@ -140,7 +140,7 @@ func (s *trimScene) got(img *image.RGBA, at time.Duration, err error) {
 			slog.Info("trim: first picture", "path", s.path, "at", at, "size", img.Bounds().Size())
 		}
 		s.tex = tex
-		s.v.St.Frame, s.v.St.Shown = trimImage, at
+		s.v.St.Frame = trimImage
 	}
 	if s.waiting {
 		s.fetch()

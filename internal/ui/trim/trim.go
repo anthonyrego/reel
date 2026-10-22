@@ -26,9 +26,8 @@ type State struct {
 	// Width and Height are the picture's size, for its shape before the
 	// first one comes.
 	Width, Height float64
-	// Frame is the picture shown (0: none yet), the one at Shown.
+	// Frame is the picture shown (0: none yet): at the handle last moved.
 	Frame draw.ImageID
-	Shown time.Duration
 	// Strip is the filmstrip drawn in the track (0: none yet), made for
 	// the size TrackPixels says.
 	Strip draw.ImageID
@@ -41,8 +40,8 @@ type State struct {
 
 // Actions are what the screen does. Any may be nil (drawn disabled).
 type Actions struct {
-	// Show asks for the picture at t (the app sets Frame and Shown when
-	// it comes; asking again before then replaces the request).
+	// Show asks for the picture at t (the app sets Frame when it comes;
+	// asking again before then replaces the request).
 	Show func(t time.Duration)
 	// Copy saves in..out beside the recording; Replace puts it in the
 	// recording's place.
@@ -210,8 +209,7 @@ func (v *View) back(c *ui.Ctx, l *draw.List, y float32, enabled bool) {
 }
 
 // drawTrack draws the track: the filmstrip, darkened outside the part
-// kept, which is framed in the trim color with a handle at each end, and
-// a line where the picture is.
+// kept, which is framed in the trim color with a handle at each end.
 func (v *View) drawTrack(c *ui.Ctx, l *draw.List) {
 	pal := c.Pal
 	r := v.track
@@ -235,10 +233,6 @@ func (v *View) drawTrack(c *ui.Ctx, l *draw.List) {
 	}
 	l.Rect(draw.Rect{X: x0, Y: r.Y - 2, W: x1 - x0, H: frameW}, col, draw.Radii{})
 	l.Rect(draw.Rect{X: x0, Y: r.Bottom() - frameW + 2, W: x1 - x0, H: frameW}, col, draw.Radii{})
-	if v.St.Frame != 0 && v.St.Duration > 0 {
-		sx := v.x(v.St.Shown)
-		l.Rect(draw.Rect{X: sx - 1, Y: r.Y - 6, W: 2, H: r.H + 12}, pal.Text, draw.Uniform(1))
-	}
 	for _, hd := range []handle{start, end} {
 		hc := col
 		if v.drag == hd {

@@ -355,7 +355,7 @@ func sampleTrim(o *offscreen, file, state string, w, h, scale float32) (scene, f
 			return nil, nil, err
 		}
 		defer fr.Close()
-		if img, st.Shown, err = fr.At(in, edge); err != nil {
+		if img, _, err = fr.At(in, edge); err != nil {
 			return nil, nil, err
 		}
 	}
@@ -411,7 +411,6 @@ func sampleTrim(o *offscreen, file, state string, w, h, scale float32) (scene, f
 			o.renderer.SetImage(trimImage, tex)
 		} else {
 			tex, err = sampleDesktop(o, trimImage, 1600, 1000)
-			v.St.Shown = in
 		}
 		if err != nil {
 			return nil, nil, err
