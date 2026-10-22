@@ -1,8 +1,8 @@
 // Package home is reel's main window: the record bar (what to record, the
 // sound, the camera, Record; while recording, the floating controls'
 // clock, pause and stop) and the recordings under it as cards, newest first, each a click
-// away from the clipboard. Pure: it draws a State and calls Actions; the
-// app owns both.
+// away from playing. Pure: it draws a State and calls Actions; the app
+// owns both.
 package home
 
 import (
@@ -536,9 +536,9 @@ func (v *View) card(c *ui.Ctx, l *draw.List, r Recording, card draw.Rect, picH f
 	over := v.hits.Hovered(card) && v.hits.Hovered(area) && v.menu == ""
 	asking := v.confirm == path
 
-	// A click anywhere on the card copies it: recorded first, so its
+	// A click anywhere on the card plays it: recorded first, so its
 	// buttons are over it.
-	v.hits.Area(card.Intersect(area), func() { call1(v.Act.Copy, path) })
+	v.hits.Area(card.Intersect(area), func() { call1(v.Act.Play, path) })
 	if over {
 		l.Rect(draw.Rect{X: card.X - 6, Y: card.Y - 6, W: card.W + 12, H: card.H + 8}, pal.Text.WithAlpha(0x0e), draw.Uniform(14))
 	}
@@ -592,8 +592,8 @@ func (v *View) card(c *ui.Ctx, l *draw.List, r Recording, card draw.Rect, picH f
 				func() { call1(do, path) })
 			x += btn + bgap
 		}
-		// Play, in the middle of the picture (the rest of the card still
-		// copies).
+		// Play, in the middle of the picture, says what a click on the
+		// card does.
 		if v.Act.Play != nil {
 			const play = 48
 			b := draw.Rect{X: pic.X + (pic.W-play)/2, Y: pic.Y + (pic.H-play)/2, W: play, H: play}

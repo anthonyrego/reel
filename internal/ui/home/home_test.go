@@ -159,18 +159,18 @@ func TestLiveShowsPauseAndStop(t *testing.T) {
 }
 
 // Every control in the bar and on a card does its one thing; a click on
-// the card itself copies it.
+// the card itself plays it.
 func TestEveryControl(t *testing.T) {
 	v := New()
 	v.St = state()
 	ran := clickAll(t, v)
-	for _, name := range []string{"record", "systemAudio", "folder", "trim", "reveal", "play"} {
+	for _, name := range []string{"record", "systemAudio", "folder", "copy", "trim", "reveal"} {
 		if ran[name] != 1 {
 			t.Errorf("%s ran %d times: %v", name, ran[name], ran)
 		}
 	}
-	// The mode's other two choices; Copy's button and the card itself.
-	if ran["target"] != 2 || ran["copy"] != 2 {
+	// The mode's other two choices; Play's button and the card itself.
+	if ran["target"] != 2 || ran["play"] != 2 {
 		t.Errorf("%v", ran)
 	}
 	if ran["delete"] != 0 {
@@ -178,8 +178,7 @@ func TestEveryControl(t *testing.T) {
 	}
 }
 
-// Play is the middle of a card's picture under the pointer; the rest of
-// the picture still copies.
+// A click anywhere on a card plays it; only the Copy button copies.
 func TestPlayFromCard(t *testing.T) {
 	v := New()
 	v.St = state()
@@ -200,14 +199,26 @@ func TestPlayFromCard(t *testing.T) {
 		v.Event(c, ui.Event{Kind: ui.PointerDown, Pos: p, Button: 1})
 		v.Event(c, ui.Event{Kind: ui.PointerUp, Pos: p, Button: 1})
 	}
-	click(draw.Point{X: card.X + card.W/2, Y: card.Y + picH/2})
-	if played != "/a.mp4" || copied != 0 {
-		t.Fatalf("the middle: played %q, copied %d", played, copied)
+	for _, at := range []struct {
+		name string
+		p    draw.Point
+	}{
+		{"the middle", draw.Point{X: card.X + card.W/2, Y: card.Y + picH/2}},
+		{"a corner", draw.Point{X: card.X + 12, Y: card.Y + picH - 12}},
+		{"the title", draw.Point{X: card.X + 12, Y: card.Bottom() - 8}},
+	} {
+		played = ""
+		click(at.p)
+		if played != "/a.mp4" || copied != 0 {
+			t.Fatalf("%s: played %q, copied %d", at.name, played, copied)
+		}
 	}
+	// Copy is the leftmost of the buttons over the picture: copy, trim
+	// (none here), show in Finder, delete.
 	played = ""
-	click(draw.Point{X: card.X + 12, Y: card.Y + picH - 12})
+	click(draw.Point{X: card.Right() - 8 - 3*28 - 2*6 + 14, Y: card.Y + 8 + 14})
 	if played != "" || copied != 1 {
-		t.Errorf("a corner: played %q, copied %d", played, copied)
+		t.Errorf("Copy: played %q, copied %d", played, copied)
 	}
 }
 
