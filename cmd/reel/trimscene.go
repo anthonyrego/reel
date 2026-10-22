@@ -219,7 +219,7 @@ func (s *trimScene) saved(dst string, replace bool, err error) {
 		s.c.say(done + " (couldn't copy it: " + cerr.Error() + ")")
 	} else {
 		s.c.copied = dst
-		s.c.say(done + ": copied, paste it into Slack")
+		s.c.say(done + ": copied")
 	}
 	s.c.refresh()
 	s.close()

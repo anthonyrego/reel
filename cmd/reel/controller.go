@@ -796,7 +796,7 @@ func (c *controller) finished(r *record.Recorder) {
 		c.say("Saved (couldn't copy it: " + err.Error() + ")")
 	} else {
 		c.copied = res.Path
-		c.say("Copied: paste it into Slack")
+		c.say("Copied")
 	}
 	slog.Info("app: recording saved", "path", res.Path, "duration", res.Duration, "lostAudio", res.AudioLost, "droppedFrames", res.Dropped)
 	c.refresh()
@@ -835,7 +835,7 @@ func (c *controller) copy(path string) {
 		return
 	}
 	c.copied = path
-	c.say("Copied: paste it into Slack")
+	c.say("Copied")
 }
 
 func (c *controller) reveal(path string) { run("open", "-R", path) }

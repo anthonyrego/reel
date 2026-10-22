@@ -79,7 +79,7 @@ var samples = map[string]func(now time.Time) (home.State, string){
 	},
 	"copied": func(now time.Time) (home.State, string) {
 		s := sampleIdle(now)
-		s.Copied, s.Toast, s.ToastAt = s.Recordings[0].Path, "Copied: paste it into Slack", now.Add(-time.Second)
+		s.Copied, s.Toast, s.ToastAt = s.Recordings[0].Path, "Copied", now.Add(-time.Second)
 		return s, ""
 	},
 }
