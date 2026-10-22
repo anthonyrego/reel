@@ -123,7 +123,7 @@ type Actions struct {
 	Stop              func()
 	Copy, Reveal      func(path string)
 	Open, Delete      func(path string)
-	Trim              func(path string)
+	Trim, Play        func(path string)
 	OpenFolder        func()
 }
 
@@ -591,6 +591,14 @@ func (v *View) card(c *ui.Ctx, l *draw.List, r Recording, card draw.Rect, picH f
 			v.hits.IconButton(c, l, b, a.icon, a.tip, controls.IconOpts{Base: draw.Color{A: 0x99}, Size: 15}, do != nil,
 				func() { call1(do, path) })
 			x += btn + bgap
+		}
+		// Play, in the middle of the picture (the rest of the card still
+		// copies).
+		if v.Act.Play != nil {
+			const play = 48
+			b := draw.Rect{X: pic.X + (pic.W-play)/2, Y: pic.Y + (pic.H-play)/2, W: play, H: play}
+			v.hits.IconButton(c, l, b, icons.Play, "Play", controls.IconOpts{Base: draw.Color{A: 0x99}, Size: 22}, true,
+				func() { call1(v.Act.Play, path) })
 		}
 	}
 

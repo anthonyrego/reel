@@ -50,6 +50,7 @@ func clickAll(t *testing.T, v *View) map[string]int {
 		Reveal:         func(string) { ran["reveal"]++ },
 		Delete:         func(string) { ran["delete"]++ },
 		Trim:           func(string) { ran["trim"]++ },
+		Play:           func(string) { ran["play"]++ },
 	}
 	var l draw.List
 	draw1 := func() { l.Reset(); v.Draw(c, &l, 720, 640) }
@@ -163,7 +164,7 @@ func TestEveryControl(t *testing.T) {
 	v := New()
 	v.St = state()
 	ran := clickAll(t, v)
-	for _, name := range []string{"record", "systemAudio", "folder", "trim", "reveal"} {
+	for _, name := range []string{"record", "systemAudio", "folder", "trim", "reveal", "play"} {
 		if ran[name] != 1 {
 			t.Errorf("%s ran %d times: %v", name, ran[name], ran)
 		}
@@ -174,6 +175,39 @@ func TestEveryControl(t *testing.T) {
 	}
 	if ran["delete"] != 0 {
 		t.Error("Delete didn't ask first")
+	}
+}
+
+// Play is the middle of a card's picture under the pointer; the rest of
+// the picture still copies.
+func TestPlayFromCard(t *testing.T) {
+	v := New()
+	v.St = state()
+	c := ctx(t)
+	played, copied := "", 0
+	v.Act = Actions{Play: func(p string) { played = p }, Copy: func(string) { copied++ }}
+	var l draw.List
+	v.Draw(c, &l, 720, 640)
+	card, ok := v.Card("/a.mp4")
+	if !ok {
+		t.Fatal("the card isn't drawn")
+	}
+	picH := card.H - 8 - textH
+	click := func(p draw.Point) {
+		v.Event(c, ui.Event{Kind: ui.PointerMove, Pos: p})
+		l.Reset()
+		v.Draw(c, &l, 720, 640) // the card's buttons show under the pointer
+		v.Event(c, ui.Event{Kind: ui.PointerDown, Pos: p, Button: 1})
+		v.Event(c, ui.Event{Kind: ui.PointerUp, Pos: p, Button: 1})
+	}
+	click(draw.Point{X: card.X + card.W/2, Y: card.Y + picH/2})
+	if played != "/a.mp4" || copied != 0 {
+		t.Fatalf("the middle: played %q, copied %d", played, copied)
+	}
+	played = ""
+	click(draw.Point{X: card.X + 12, Y: card.Y + picH - 12})
+	if played != "" || copied != 1 {
+		t.Errorf("a corner: played %q, copied %d", played, copied)
 	}
 }
 
